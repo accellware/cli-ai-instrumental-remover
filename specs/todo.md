@@ -60,28 +60,28 @@ Track progress by checking off each item as it is completed.
 
 ### `src/config.rs` — Types
 
-- [ ] Define `ExecutionProvider` enum with `Cpu` and `Cuda` variants
-- [ ] Serde rename: `"cpu"` → `Cpu`, `"cuda"` → `Cuda`
-- [ ] Define `Config` struct with fields: `model_path`, `output_dir`, `execution_provider`, `chunk_size`
-- [ ] Derive `Deserialize` on both types
+- [x] Define `ExecutionProvider` enum with `Cpu` and `Cuda` variants
+- [x] Serde rename: `"cpu"` → `Cpu`, `"cuda"` → `Cuda`
+- [x] Define `Config` struct with fields: `model_path`, `output_dir`, `execution_provider`, `chunk_size`
+- [x] Derive `Deserialize` on both types
 
 ### `src/config.rs` — `load()` Function
 
-- [ ] Look for `config.json` in `std::env::current_dir()`
-- [ ] Return `AppError::ConfigNotFound` if file absent
-- [ ] Parse JSON and return `AppError::ConfigParse` on malformed input
-- [ ] Validate `chunk_size > 0`, return `AppError::ConfigParse` if zero
-- [ ] Return parsed `Config` on success
+- [x] Look for `config.json` in `std::env::current_dir()`
+- [x] Return `AppError::ConfigNotFound` if file absent
+- [x] Parse JSON and return `AppError::ConfigParse` on malformed input
+- [x] Validate `chunk_size > 0`, return `AppError::ConfigParse` if zero
+- [x] Return parsed `Config` on success
 
 ### Tests — `config.rs`
 
-- [ ] Valid config deserializes all fields correctly
-- [ ] Missing `config.json` → `AppError::ConfigNotFound`
-- [ ] Malformed JSON → `AppError::ConfigParse`
-- [ ] `chunk_size: 0` → `AppError::ConfigParse`
-- [ ] Unknown `execution_provider` string → `AppError::ConfigParse`
-- [ ] `"cuda"` deserializes to `ExecutionProvider::Cuda`
-- [ ] `cargo test` passes
+- [x] Valid config deserializes all fields correctly
+- [x] Missing `config.json` → `AppError::ConfigNotFound`
+- [x] Malformed JSON → `AppError::ConfigParse`
+- [x] `chunk_size: 0` → `AppError::ConfigParse`
+- [x] Unknown `execution_provider` string → `AppError::ConfigParse`
+- [x] `"cuda"` deserializes to `ExecutionProvider::Cuda`
+- [x] `cargo test` passes (7/7)
 
 ---
 
