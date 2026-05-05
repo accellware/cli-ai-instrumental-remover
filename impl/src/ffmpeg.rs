@@ -89,6 +89,98 @@ mod imp {
 
         Ok(AudioInfo { sample_rate, channels })
     }
+
+    pub fn remux_with_audio(
+        video_path: &Path,
+        vocals_wav: &Path,
+        output_path: &Path,
+    ) -> Result<(), AppError> {
+        ffmpeg::init().map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+
+        let mut video_ictx = ffmpeg::format::input(video_path)
+            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+        let mut audio_ictx = ffmpeg::format::input(vocals_wav)
+            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+        let mut octx = ffmpeg::format::output(output_path)
+            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+
+        // video_stream_map: (video_in_stream_index, video_in_time_base, output_stream_index)
+        // audio info: (audio_in_stream_index, audio_in_time_base, audio_output_stream_index)
+        let (video_stream_map, audio_in_idx, audio_in_tb, audio_out_idx) = {
+            let mut vmap: Vec<(usize, ffmpeg::Rational, usize)> = Vec::new();
+            let mut out_idx = 0usize;
+
+            for in_stream in video_ictx.streams() {
+                if in_stream.parameters().medium() == ffmpeg::media::Type::Video {
+                    let mut out_stream = octx
+                        .add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))
+                        .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+                    out_stream.set_parameters(in_stream.parameters());
+                    vmap.push((in_stream.index(), in_stream.time_base(), out_idx));
+                    out_idx += 1;
+                }
+            }
+
+            let audio_in_stream = audio_ictx
+                .streams()
+                .best(ffmpeg::media::Type::Audio)
+                .ok_or_else(|| AppError::FfmpegRemux("vocals WAV has no audio stream".to_string()))?;
+            let a_in_idx = audio_in_stream.index();
+            let a_in_tb = audio_in_stream.time_base();
+
+            {
+                let mut out_audio = octx
+                    .add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))
+                    .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+                out_audio.set_parameters(audio_in_stream.parameters());
+            }
+
+            (vmap, a_in_idx, a_in_tb, out_idx)
+            // all borrows on video_ictx, audio_ictx, octx dropped here
+        };
+
+        octx.write_header()
+            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+
+        // Write all video packets from original
+        for (stream, mut packet) in video_ictx.packets() {
+            if let Some(&(_, in_tb, out_idx)) = video_stream_map
+                .iter()
+                .find(|(in_idx, _, _)| *in_idx == stream.index())
+            {
+                let out_tb = octx
+                    .stream(out_idx)
+                    .ok_or_else(|| AppError::FfmpegRemux("output video stream missing".to_string()))?
+                    .time_base();
+                packet.rescale_ts(in_tb, out_tb);
+                packet.set_stream(out_idx);
+                packet
+                    .write_interleaved(&mut octx)
+                    .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+            }
+        }
+
+        // Write all audio packets from vocals WAV
+        for (stream, mut packet) in audio_ictx.packets() {
+            if stream.index() != audio_in_idx {
+                continue;
+            }
+            let out_tb = octx
+                .stream(audio_out_idx)
+                .ok_or_else(|| AppError::FfmpegRemux("output audio stream missing".to_string()))?
+                .time_base();
+            packet.rescale_ts(audio_in_tb, out_tb);
+            packet.set_stream(audio_out_idx);
+            packet
+                .write_interleaved(&mut octx)
+                .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+        }
+
+        octx.write_trailer()
+            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 pub fn probe_audio(video_path: &Path) -> Result<Option<AudioInfo>, AppError> {
@@ -116,6 +208,24 @@ pub fn extract_audio(video_path: &Path, output_wav: &Path) -> Result<AudioInfo, 
     }
 }
 
+pub fn remux_with_audio(
+    video_path: &Path,
+    vocals_wav: &Path,
+    output_path: &Path,
+) -> Result<(), AppError> {
+    #[cfg(feature = "ffmpeg")]
+    return imp::remux_with_audio(video_path, vocals_wav, output_path);
+    #[cfg(not(feature = "ffmpeg"))]
+    {
+        let _ = video_path;
+        let _ = vocals_wav;
+        let _ = output_path;
+        return Err(AppError::FfmpegRemux(
+            "ffmpeg feature is not enabled; rebuild with --features ffmpeg".to_string(),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +235,16 @@ mod tests {
     #[test]
     fn probe_audio_missing_file_returns_error() {
         let result = probe_audio(std::path::Path::new("/nonexistent/file.mp4"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remux_missing_input_returns_error() {
+        let result = remux_with_audio(
+            std::path::Path::new("/nonexistent/video.mp4"),
+            std::path::Path::new("/nonexistent/audio.wav"),
+            std::path::Path::new("/tmp/out.mp4"),
+        );
         assert!(result.is_err());
     }
 }
