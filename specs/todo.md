@@ -117,31 +117,31 @@ Track progress by checking off each item as it is completed.
 
 ### `src/ffmpeg.rs` — Types & Init
 
-- [ ] Define `AudioInfo` struct with `sample_rate: u32` and `channels: u16`
-- [ ] Call `ffmpeg_next::init()` at the top of each public function
+- [x] Define `AudioInfo` struct with `sample_rate: u32` and `channels: u16`
+- [x] Call `ffmpeg_next::init()` at the top of each public function
 
 ### `src/ffmpeg.rs` — `probe_audio`
 
-- [ ] Open input with `ffmpeg_next::format::input`
-- [ ] Wrap open errors as `AppError::FfmpegProbe`
-- [ ] Iterate streams looking for an audio stream
-- [ ] Return `Some(AudioInfo)` if audio stream found with correct sample_rate and channels
-- [ ] Return `None` if no audio stream present
+- [x] Open input with `ffmpeg_next::format::input`
+- [x] Wrap open errors as `AppError::FfmpegProbe`
+- [x] Iterate streams looking for an audio stream
+- [x] Return `Some(AudioInfo)` if audio stream found with correct sample_rate and channels
+- [x] Return `None` if no audio stream present
 
 ### `src/ffmpeg.rs` — `extract_audio`
 
-- [ ] Open input video
-- [ ] Find best audio stream
-- [ ] Open output WAV with `wav` muxer
-- [ ] Add audio stream to output copying codec parameters
-- [ ] Demux and write audio packets, flush at end
-- [ ] Return `AudioInfo` from source stream
-- [ ] Wrap all errors as `AppError::FfmpegExtract`
+- [x] Open input video
+- [x] Find best audio stream
+- [x] Open output WAV with `wav` muxer
+- [x] Add audio stream to output copying codec parameters
+- [x] Demux and write audio packets, flush at end
+- [x] Return `AudioInfo` from source stream
+- [x] Wrap all errors as `AppError::FfmpegExtract`
 
 ### Tests — `ffmpeg.rs` (Prompt 4)
 
-- [ ] `probe_audio` on nonexistent file returns `Err`
-- [ ] `cargo build` succeeds
+- [x] `probe_audio` on nonexistent file returns `Err`
+- [x] `cargo build` succeeds
 
 ---
 
@@ -149,21 +149,21 @@ Track progress by checking off each item as it is completed.
 
 ### `src/ffmpeg.rs` — `remux_with_audio`
 
-- [ ] Open original video input — wrap as `AppError::FfmpegRemux`
-- [ ] Open vocals WAV input
-- [ ] Open output file
-- [ ] Copy all video streams with `-c:v copy` semantics
-- [ ] Copy audio stream from vocals WAV with `-c:a copy` semantics
-- [ ] Write output header
-- [ ] Interleave and write all packets, rescaling PTS/DTS with `packet.rescale_ts`
-- [ ] Write output trailer
-- [ ] Wrap all errors as `AppError::FfmpegRemux`
+- [x] Open original video input — wrap as `AppError::FfmpegRemux`
+- [x] Open vocals WAV input
+- [x] Open output file
+- [x] Copy all video streams with `-c:v copy` semantics
+- [x] Copy audio stream from vocals WAV with `-c:a copy` semantics
+- [x] Write output header
+- [x] Interleave and write all packets, rescaling PTS/DTS with `packet.rescale_ts`
+- [x] Write output trailer
+- [x] Wrap all errors as `AppError::FfmpegRemux`
 
 ### Tests — `ffmpeg.rs` (Prompt 5)
 
-- [ ] `remux_with_audio` on nonexistent inputs returns `Err`
-- [ ] All previous tests still pass
-- [ ] `cargo build` succeeds
+- [x] `remux_with_audio` on nonexistent inputs returns `Err`
+- [x] All previous tests still pass
+- [x] `cargo build` succeeds
 
 ---
 
@@ -171,27 +171,27 @@ Track progress by checking off each item as it is completed.
 
 ### `src/inference.rs` — DSP Primitives
 
-- [ ] Implement `hann_window(size: usize) -> Vec<f32>` using `0.5 * (1 - cos(2π*i/n))`
-- [ ] Implement `stft(signal, fft_size, hop_length, window) -> Vec<Vec<[f32; 2]>>`
-  - [ ] Center-pad signal with `fft_size/2` zeros on each side
-  - [ ] Apply window element-wise per frame
-  - [ ] Run forward FFT via `rustfft`
-  - [ ] Return only first `fft_size/2 + 1` bins (one-sided spectrum)
-- [ ] Implement `istft(frames, fft_size, hop_length, window, signal_length) -> Vec<f32>`
-  - [ ] Mirror-conjugate one-sided spectrum to full spectrum
-  - [ ] Run inverse FFT per frame
-  - [ ] Apply window element-wise
-  - [ ] Overlap-add into output buffer
-  - [ ] Normalize by sum-of-squared windows (OLA normalization)
-  - [ ] Trim output to `signal_length`
+- [x] Implement `hann_window(size: usize) -> Vec<f32>` using `0.5 * (1 - cos(2π*i/n))`
+- [x] Implement `stft(signal, fft_size, hop_length, window) -> Vec<Vec<[f32; 2]>>`
+  - [x] Center-pad signal with `fft_size/2` zeros on each side
+  - [x] Apply window element-wise per frame
+  - [x] Run forward FFT via `rustfft`
+  - [x] Return only first `fft_size/2 + 1` bins (one-sided spectrum)
+- [x] Implement `istft(frames, fft_size, hop_length, window, signal_length) -> Vec<f32>`
+  - [x] Mirror-conjugate one-sided spectrum to full spectrum
+  - [x] Run inverse FFT per frame
+  - [x] Apply window element-wise
+  - [x] Overlap-add into output buffer
+  - [x] Normalize by sum-of-squared windows (OLA normalization)
+  - [x] Trim output to `signal_length`
 
 ### Tests — DSP Primitives
 
-- [ ] `hann_window(4)` ≈ `[0.0, 0.75, 0.75, 0.0]` within `1e-5`
-- [ ] STFT round-trip on 440 Hz sine (44100 samples): max absolute error < `0.01`
-- [ ] STFT on zero signal returns all-zero frames
-- [ ] `istft` output length equals `signal_length`
-- [ ] `cargo test` passes
+- [x] `hann_window(4)` ≈ `[0.0, 0.75, 0.75, 0.0]` within `1e-5`
+- [x] STFT round-trip on 440 Hz sine (44100 samples): max absolute error < `0.01`
+- [x] STFT on zero signal returns all-zero frames
+- [x] `istft` output length equals `signal_length`
+- [x] `cargo test` passes
 
 ---
 
@@ -199,27 +199,27 @@ Track progress by checking off each item as it is completed.
 
 ### `src/inference.rs` — Preprocessing Functions
 
-- [ ] Implement `resample(signal, from_rate, to_rate) -> Vec<f32>` using linear interpolation
-- [ ] Implement `to_mono(samples, channels) -> Vec<f32>`
-  - [ ] Pass through if `channels == 1`
-  - [ ] Average pairs for stereo; average N samples for N channels
-- [ ] Implement `interleave_stereo(left, right) -> Vec<f32>` → `[L0, R0, L1, R1, ...]`
-- [ ] Implement `normalize(signal) -> (Vec<f32>, f32)`
-  - [ ] Divide by max absolute value
-  - [ ] Return `(normalized, scale_factor)`
-  - [ ] Handle zero signal: return unchanged with scale = 1.0
-- [ ] Implement `denormalize(signal, scale) -> Vec<f32>` → multiply each sample by scale
+- [x] Implement `resample(signal, from_rate, to_rate) -> Vec<f32>` using linear interpolation
+- [x] Implement `to_mono(samples, channels) -> Vec<f32>`
+  - [x] Pass through if `channels == 1`
+  - [x] Average pairs for stereo; average N samples for N channels
+- [x] Implement `interleave_stereo(left, right) -> Vec<f32>` → `[L0, R0, L1, R1, ...]`
+- [x] Implement `normalize(signal) -> (Vec<f32>, f32)`
+  - [x] Divide by max absolute value
+  - [x] Return `(normalized, scale_factor)`
+  - [x] Handle zero signal: return unchanged with scale = 1.0
+- [x] Implement `denormalize(signal, scale) -> Vec<f32>` → multiply each sample by scale
 
 ### Tests — Preprocessing
 
-- [ ] `to_mono([1.0, 0.0, 0.0, 1.0], channels=2)` → `[0.5, 0.5]`
-- [ ] `resample` from 44100→22050 on 44100-sample signal → 22050-sample output
-- [ ] `resample` from 22050→44100 on 22050-sample signal → 44100-sample output
-- [ ] `normalize([2.0, -4.0, 1.0])` → `([0.5, -1.0, 0.25], 4.0)`
-- [ ] `denormalize(normalize(x))` round-trips within `1e-6`
-- [ ] `interleave_stereo([1.0, 2.0], [3.0, 4.0])` → `[1.0, 3.0, 2.0, 4.0]`
-- [ ] All previous tests still pass
-- [ ] `cargo test` passes
+- [x] `to_mono([1.0, 0.0, 0.0, 1.0], channels=2)` → `[0.5, 0.5]`
+- [x] `resample` from 44100→22050 on 44100-sample signal → 22050-sample output
+- [x] `resample` from 22050→44100 on 22050-sample signal → 44100-sample output
+- [x] `normalize([2.0, -4.0, 1.0])` → `([0.5, -1.0, 0.25], 4.0)`
+- [x] `denormalize(normalize(x))` round-trips within `1e-6`
+- [x] `interleave_stereo([1.0, 2.0], [3.0, 4.0])` → `[1.0, 3.0, 2.0, 4.0]`
+- [x] All previous tests still pass
+- [x] `cargo test` passes
 
 ---
 
@@ -227,42 +227,42 @@ Track progress by checking off each item as it is completed.
 
 ### `src/inference.rs` — `Separator` Struct
 
-- [ ] Define `Separator` struct with fields: `session`, `params`, `chunk_size`
-- [ ] Implement `Separator::new(config, params) -> Result<Self, AppError>`
-  - [ ] Build `ort::SessionBuilder`
-  - [ ] Add CUDA execution provider if `ExecutionProvider::Cuda`
-  - [ ] Load model from `config.model_path`
-  - [ ] Wrap load errors as `AppError::OnnxLoad`
+- [x] Define `Separator` struct with fields: `session`, `params`, `chunk_size`
+- [x] Implement `Separator::new(config, params) -> Result<Self, AppError>`
+  - [x] Build `ort::SessionBuilder`
+  - [x] Add CUDA execution provider if `ExecutionProvider::Cuda`
+  - [x] Load model from `config.model_path`
+  - [x] Wrap load errors as `AppError::OnnxLoad`
 
 ### `src/inference.rs` — `separate_vocals`
 
-- [ ] Read WAV with `hound::WavReader` → `AppError::AudioRead`
-- [ ] Collect samples as `Vec<f32>` (normalize i16/i32 to float range)
-- [ ] Call `to_mono(samples, channels)`
-- [ ] Resample to 44100 Hz if needed; record whether resampling occurred
-- [ ] Call `normalize` to get `(normalized, scale)`
-- [ ] Compute `hop_length = mdx_n_fft_scale_set / 4`
-- [ ] Compute `hann_window(mdx_n_fft_scale_set)`
-- [ ] Split signal into overlapping chunks (50% overlap), zero-pad last chunk
-- [ ] Per chunk:
-  - [ ] Run `stft` → complex spectrogram
-  - [ ] Reshape to tensor `[1, 4, mdx_dim_f_set, mdx_dim_t_set]`
-  - [ ] Run ONNX forward pass → `AppError::OnnxInference`
-  - [ ] Reshape output tensor back to complex frames
-  - [ ] Run `istft` to reconstruct time-domain chunk
-  - [ ] Call `progress_cb(chunk_index / total_chunks)`
-- [ ] Overlap-add all output chunks into full-length signal
-- [ ] Apply `compensate` multiplier
-- [ ] Call `denormalize(output, scale)`
-- [ ] Resample back to original sample rate if resampling occurred
-- [ ] Duplicate mono to stereo via `interleave_stereo` if original was stereo
-- [ ] Write output WAV with `hound::WavWriter` at original sample rate and channels → `AppError::AudioWrite`
+- [x] Read WAV with `hound::WavReader` → `AppError::AudioRead`
+- [x] Collect samples as `Vec<f32>` (normalize i16/i32 to float range)
+- [x] Call `to_mono(samples, channels)`
+- [x] Resample to 44100 Hz if needed; record whether resampling occurred
+- [x] Call `normalize` to get `(normalized, scale)`
+- [x] Compute `hop_length = mdx_n_fft_scale_set / 4`
+- [x] Compute `hann_window(mdx_n_fft_scale_set)`
+- [x] Split signal into overlapping chunks (50% overlap), zero-pad last chunk
+- [x] Per chunk:
+  - [x] Run `stft` → complex spectrogram
+  - [x] Reshape to tensor `[1, 4, mdx_dim_f_set, mdx_dim_t_set]`
+  - [x] Run ONNX forward pass → `AppError::OnnxInference`
+  - [x] Reshape output tensor back to complex frames
+  - [x] Run `istft` to reconstruct time-domain chunk
+  - [x] Call `progress_cb(chunk_index / total_chunks)`
+- [x] Overlap-add all output chunks into full-length signal
+- [x] Apply `compensate` multiplier
+- [x] Call `denormalize(output, scale)`
+- [x] Resample back to original sample rate if resampling occurred
+- [x] Duplicate mono to stereo via `interleave_stereo` if original was stereo
+- [x] Write output WAV with `hound::WavWriter` at original sample rate and channels → `AppError::AudioWrite`
 
 ### Tests — Inference
 
-- [ ] `Separator::new` fails on missing model file → `AppError::OnnxLoad`
-- [ ] All previous tests still pass
-- [ ] `cargo build` succeeds
+- [x] `Separator::new` fails on missing model file → `AppError::OnnxLoad`
+- [x] All previous tests still pass
+- [x] `cargo build` succeeds
 
 ---
 

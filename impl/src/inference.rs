@@ -1,7 +1,12 @@
 // DSP primitives — pure Rust, no ONNX, no FFmpeg.
 // Implemented in Prompt 6.
+// Prompt 8 adds the Separator struct and separate_vocals method.
 
+use std::path::Path;
 use rustfft::{FftPlanner, num_complex::Complex};
+use crate::config::{Config, ExecutionProvider};
+use crate::model_data::ModelParams;
+use crate::error::AppError;
 
 /// Symmetric Hann window of length `size`.
 ///
@@ -252,6 +257,247 @@ pub fn denormalize(signal: &[f32], scale: f32) -> Vec<f32> {
     signal.iter().map(|x| x * scale).collect()
 }
 
+// ── Separator ─────────────────────────────────────────────────────────────────
+
+/// Wraps an ONNX Runtime session and the associated MDX-Net model parameters.
+#[derive(Debug)]
+pub struct Separator {
+    session: ort::session::Session,
+    params: ModelParams,
+    chunk_size: usize,
+}
+
+impl Separator {
+    /// Create a new `Separator` by building an ORT session from `config`.
+    pub fn new(config: &Config, params: ModelParams) -> Result<Self, AppError> {
+        let builder = ort::session::Session::builder()
+            .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+
+        let mut builder = match config.execution_provider {
+            ExecutionProvider::Cuda => builder
+                .with_execution_providers([ort::ep::CUDA::default().build()])
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?,
+            ExecutionProvider::Cpu => builder,
+        };
+
+        let session = builder
+            .commit_from_file(&config.model_path)
+            .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+
+        Ok(Self {
+            session,
+            params,
+            chunk_size: config.chunk_size,
+        })
+    }
+
+    /// Separate vocals from `wav_path` and write the result to `output_path`.
+    ///
+    /// `progress_cb` is called with values in `[0.0, 1.0]` as processing advances.
+    pub fn separate_vocals(
+        &mut self,
+        wav_path: &Path,
+        output_path: &Path,
+        progress_cb: impl Fn(f32),
+    ) -> Result<(), AppError> {
+        // ── Step 1: Read WAV ──────────────────────────────────────────────────
+        let mut reader = hound::WavReader::open(wav_path)
+            .map_err(|e| AppError::AudioRead(e.to_string()))?;
+        let spec = reader.spec();
+        let orig_sample_rate = spec.sample_rate;
+        let orig_channels = spec.channels;
+
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|s| s.map_err(|e| AppError::AudioRead(e.to_string())))
+                .collect::<Result<Vec<_>, _>>()?,
+            hound::SampleFormat::Int => {
+                let bits = spec.bits_per_sample;
+                let max_val = (1_i32 << (bits - 1)) as f32;
+                reader
+                    .samples::<i32>()
+                    .map(|s| {
+                        s.map(|v| v as f32 / max_val)
+                            .map_err(|e| AppError::AudioRead(e.to_string()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+
+        // ── Step 2: Mono + resample to 44100 ─────────────────────────────────
+        let mono = to_mono(&samples, orig_channels);
+        let needs_resample = orig_sample_rate != 44100;
+        let resampled = if needs_resample {
+            resample(&mono, orig_sample_rate, 44100)
+        } else {
+            mono
+        };
+
+        // ── Step 3: Normalize ─────────────────────────────────────────────────
+        let (normalized, scale) = normalize(&resampled);
+
+        // ── Step 4: DSP parameters ────────────────────────────────────────────
+        let fft_size = self.params.mdx_n_fft_scale_set;
+        let hop_length = fft_size / 4;
+        let window = hann_window(fft_size);
+
+        // ── Step 5: Split into overlapping chunks (50 % overlap) ─────────────
+        let hop = self.chunk_size / 2;
+        let mut chunks: Vec<Vec<f32>> = Vec::new();
+        let mut start = 0usize;
+        while start < normalized.len() {
+            let end = (start + self.chunk_size).min(normalized.len());
+            let mut chunk = normalized[start..end].to_vec();
+            if chunk.len() < self.chunk_size {
+                chunk.resize(self.chunk_size, 0.0); // zero-pad last chunk
+            }
+            chunks.push(chunk);
+            if start + self.chunk_size >= normalized.len() {
+                break;
+            }
+            start += hop;
+        }
+        let total_chunks = chunks.len();
+
+        // ── Step 6: Chunk processing loop ─────────────────────────────────────
+        let mut output_chunks: Vec<Vec<f32>> = Vec::with_capacity(total_chunks);
+
+        for (idx, chunk) in chunks.iter().enumerate() {
+            let n_bins_model = self.params.mdx_dim_f_set;
+            let n_time_model = self.params.mdx_dim_t_set;
+
+            // a) STFT
+            let frames = stft(chunk, fft_size, hop_length, &window);
+
+            // b) Build input tensor [1, 4, n_bins_model, n_time_model]
+            let frames_to_use: Vec<&Vec<[f32; 2]>> =
+                frames.iter().take(n_time_model).collect();
+
+            let mut tensor_data = vec![0.0_f32; 4 * n_bins_model * n_time_model];
+            for t in 0..n_time_model {
+                for f in 0..n_bins_model {
+                    let (re, im) =
+                        if t < frames_to_use.len() && f < frames_to_use[t].len() {
+                            (frames_to_use[t][f][0], frames_to_use[t][f][1])
+                        } else {
+                            (0.0_f32, 0.0_f32)
+                        };
+                    // channels 0 (real) and 1 (imag) for input ch0
+                    tensor_data[0 * n_bins_model * n_time_model + f * n_time_model + t] = re;
+                    tensor_data[1 * n_bins_model * n_time_model + f * n_time_model + t] = im;
+                    // channels 2 (real) and 3 (imag) — copies for ch1
+                    tensor_data[2 * n_bins_model * n_time_model + f * n_time_model + t] = re;
+                    tensor_data[3 * n_bins_model * n_time_model + f * n_time_model + t] = im;
+                }
+            }
+
+            // c) Run ONNX forward pass — scoped so `outputs` is dropped before
+            //    the next iteration borrows `self.session` again.
+            let out_frames: Vec<Vec<[f32; 2]>> = {
+                let tensor = ort::value::Tensor::<f32>::from_array(
+                    ([1usize, 4, n_bins_model, n_time_model], tensor_data),
+                )
+                .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+
+                let outputs = self
+                    .session
+                    .run(ort::inputs![tensor])
+                    .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+
+                // d) Extract output and rebuild complex frames
+                let (_out_shape, output_flat) = outputs[0]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+
+                let mut frames_out: Vec<Vec<[f32; 2]>> =
+                    vec![vec![[0.0, 0.0]; n_bins_model]; n_time_model];
+                for t in 0..n_time_model {
+                    for f in 0..n_bins_model {
+                        let base = f * n_time_model + t;
+                        let re = output_flat.get(base).copied().unwrap_or(0.0);
+                        let imag_base = n_bins_model * n_time_model + base;
+                        let im = output_flat.get(imag_base).copied().unwrap_or(0.0);
+                        frames_out[t][f] = [re, im];
+                    }
+                }
+                frames_out
+                // `outputs` is dropped here, releasing the mutable borrow on
+                // `self.session`.
+            };
+
+            // e) iSTFT → time-domain chunk
+            let chunk_output = istft(&out_frames, fft_size, hop_length, &window, chunk.len());
+            output_chunks.push(chunk_output);
+            progress_cb(idx as f32 / total_chunks as f32);
+        }
+
+        // ── Step 7: Overlap-add reconstruction ───────────────────────────────
+        let output_len = normalized.len();
+        let mut full_output = vec![0.0_f32; output_len];
+        let mut weight = vec![0.0_f32; output_len];
+
+        let mut pos = 0usize;
+        for chunk_out in &output_chunks {
+            let copy_len = chunk_out.len().min(output_len.saturating_sub(pos));
+            for i in 0..copy_len {
+                full_output[pos + i] += chunk_out[i];
+                weight[pos + i] += 1.0;
+            }
+            if pos + self.chunk_size >= output_len {
+                break;
+            }
+            pos += self.chunk_size / 2;
+        }
+
+        for i in 0..output_len {
+            if weight[i] > 0.0 {
+                full_output[i] /= weight[i];
+            }
+        }
+
+        // ── Step 8: Compensate, denormalize, optionally resample back ─────────
+        for s in full_output.iter_mut() {
+            *s *= self.params.compensate;
+        }
+
+        let mut final_output = denormalize(&full_output, scale);
+
+        if needs_resample {
+            final_output = resample(&final_output, 44100, orig_sample_rate);
+        }
+
+        // ── Step 9: Restore stereo if needed, write WAV ───────────────────────
+        let write_samples = if orig_channels == 2 {
+            interleave_stereo(&final_output, &final_output)
+        } else {
+            final_output
+        };
+
+        let out_spec = hound::WavSpec {
+            channels: orig_channels,
+            sample_rate: orig_sample_rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(output_path, out_spec)
+            .map_err(|e| AppError::AudioWrite(e.to_string()))?;
+        for s in &write_samples {
+            writer
+                .write_sample(*s)
+                .map_err(|e| AppError::AudioWrite(e.to_string()))?;
+        }
+        writer
+            .finalize()
+            .map_err(|e| AppError::AudioWrite(e.to_string()))?;
+
+        progress_cb(1.0);
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +613,32 @@ mod tests {
         let right = vec![3.0_f32, 4.0];
         let out = interleave_stereo(&left, &right);
         assert_eq!(out, vec![1.0, 3.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn separator_new_fails_on_missing_model() {
+        use std::path::PathBuf;
+        use crate::config::{Config, ExecutionProvider};
+        use crate::model_data::ModelParams;
+
+        let config = Config {
+            model_path: PathBuf::from("/nonexistent/model.onnx"),
+            output_dir: PathBuf::from("./output"),
+            execution_provider: ExecutionProvider::Cpu,
+            chunk_size: 261120,
+        };
+        let params = ModelParams {
+            compensate: 1.0,
+            mdx_dim_f_set: 3072,
+            mdx_dim_t_set: 8,
+            mdx_n_fft_scale_set: 7680,
+            primary_stem: "Vocals".to_string(),
+            name: "model.onnx".to_string(),
+        };
+        let result = Separator::new(&config, params);
+        assert!(
+            matches!(result, Err(AppError::OnnxLoad(_))),
+            "expected OnnxLoad, got: {result:?}"
+        );
     }
 }
