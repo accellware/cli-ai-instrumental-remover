@@ -89,27 +89,27 @@ Track progress by checking off each item as it is completed.
 
 ### `src/model_data.rs` — Types
 
-- [ ] Define `ModelParams` struct with fields: `compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`, `name`
-- [ ] Derive `Deserialize` on `ModelParams`
+- [x] Define `ModelParams` struct with fields: `compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`, `name`
+- [x] Derive `Deserialize` on `ModelParams`
 
 ### `src/model_data.rs` — Functions
 
-- [ ] Implement `load(model_data_path: &Path) -> Result<Vec<ModelParams>, AppError>`
-  - [ ] Return `AppError::ModelDataNotFound` if file absent
-  - [ ] Return `AppError::ModelDataParse` if JSON parsing fails
-  - [ ] Deserialize hash map and return its values as `Vec<ModelParams>`
-- [ ] Implement `find_by_name(params: &[ModelParams], model_filename: &str) -> Result<&ModelParams, AppError>`
-  - [ ] Match on `name` field (filename only, not full path)
-  - [ ] Return `AppError::ModelNotInRegistry` if not found
+- [x] Implement `load(model_data_path: &Path) -> Result<Vec<ModelParams>, AppError>`
+  - [x] Return `AppError::ModelDataNotFound` if file absent
+  - [x] Return `AppError::ModelDataParse` if JSON parsing fails
+  - [x] Deserialize hash map and return its values as `Vec<ModelParams>`
+- [x] Implement `find_by_name(params: &[ModelParams], model_filename: &str) -> Result<&ModelParams, AppError>`
+  - [x] Match on `name` field (filename only, not full path)
+  - [x] Return `AppError::ModelNotInRegistry` if not found
 
 ### Tests — `model_data.rs`
 
-- [ ] `load` on valid JSON tempfile returns correct `Vec`
-- [ ] `load` on missing file → `ModelDataNotFound`
-- [ ] `load` on malformed JSON → `ModelDataParse`
-- [ ] `find_by_name` correctly finds `"UVR-MDX-NET-Voc_FT.onnx"`
-- [ ] `find_by_name` on unknown name → `ModelNotInRegistry`
-- [ ] `cargo test` passes
+- [x] `load` on valid JSON tempfile returns correct `Vec`
+- [x] `load` on missing file → `ModelDataNotFound`
+- [x] `load` on malformed JSON → `ModelDataParse`
+- [x] `find_by_name` correctly finds `"UVR-MDX-NET-Voc_FT.onnx"`
+- [x] `find_by_name` on unknown name → `ModelNotInRegistry`
+- [x] `cargo test` passes (12/12)
 
 ---
 
