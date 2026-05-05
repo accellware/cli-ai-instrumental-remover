@@ -170,6 +170,88 @@ pub fn istft(
     }
 }
 
+/// Resample `signal` from `from_rate` Hz to `to_rate` Hz using linear interpolation.
+///
+/// Special cases:
+/// - `from_rate == to_rate` → returns `signal.to_vec()` (no-op).
+/// - `signal.is_empty()` → returns empty Vec.
+pub fn resample(signal: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate {
+        return signal.to_vec();
+    }
+    if signal.is_empty() {
+        return Vec::new();
+    }
+
+    let ratio = from_rate as f64 / to_rate as f64;
+    let output_len = (signal.len() as f64 / ratio).round() as usize;
+    let mut output = Vec::with_capacity(output_len);
+
+    for i in 0..output_len {
+        let src_pos = i as f64 * ratio;
+        let src_i = src_pos.floor() as usize;
+        let frac = src_pos - src_pos.floor();
+        let clamped_next = (src_i + 1).min(signal.len() - 1);
+        output.push(signal[src_i] * (1.0 - frac) as f32 + signal[clamped_next] * frac as f32);
+    }
+
+    output
+}
+
+/// Mix a multi-channel interleaved `signal` down to mono by averaging each frame.
+///
+/// - `channels == 0` or `channels == 1` → returns `signal.to_vec()`.
+/// - Trailing samples that don't form a complete frame are silently dropped.
+pub fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+
+    let c = channels as usize;
+    let output_len = samples.len() / c;
+    let inv_c = 1.0_f32 / channels as f32;
+    let mut output = Vec::with_capacity(output_len);
+
+    for i in 0..output_len {
+        let sum: f32 = samples[i * c..i * c + c].iter().sum();
+        output.push(sum * inv_c);
+    }
+
+    output
+}
+
+/// Interleave `left` and `right` channels into a single stereo buffer `[L0, R0, L1, R1, ...]`.
+///
+/// Output length is `2 * min(left.len(), right.len())`.
+pub fn interleave_stereo(left: &[f32], right: &[f32]) -> Vec<f32> {
+    let n = left.len().min(right.len());
+    let mut output = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        output.push(left[i]);
+        output.push(right[i]);
+    }
+    output
+}
+
+/// Normalise `signal` so the peak absolute value is 1.0.
+///
+/// Returns `(normalised_signal, scale)` where `scale` is the peak magnitude
+/// used for division.  If the peak is below 1e-8 the original signal is
+/// returned unchanged with `scale = 1.0` (avoids division by zero).
+pub fn normalize(signal: &[f32]) -> (Vec<f32>, f32) {
+    let max_abs = signal.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
+    if max_abs < 1e-8 {
+        return (signal.to_vec(), 1.0);
+    }
+    let normalized = signal.iter().map(|x| x / max_abs).collect();
+    (normalized, max_abs)
+}
+
+/// Undo a previous [`normalize`] call by multiplying each sample by `scale`.
+pub fn denormalize(signal: &[f32], scale: f32) -> Vec<f32> {
+    signal.iter().map(|x| x * scale).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +316,56 @@ mod tests {
         let frames = stft(&signal, fft_size, hop, &window);
         let out = istft(&frames, fft_size, hop, &window, signal.len());
         assert_eq!(out.len(), signal.len());
+    }
+
+    #[test]
+    fn to_mono_stereo_averages_pairs() {
+        let samples = vec![1.0_f32, 0.0, 0.0, 1.0];
+        let mono = to_mono(&samples, 2);
+        assert_eq!(mono.len(), 2);
+        assert!((mono[0] - 0.5).abs() < 1e-6);
+        assert!((mono[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resample_downsample_44100_to_22050() {
+        let signal: Vec<f32> = (0..44100).map(|i| i as f32 / 44100.0).collect();
+        let down = resample(&signal, 44100, 22050);
+        assert_eq!(down.len(), 22050);
+    }
+
+    #[test]
+    fn resample_upsample_22050_to_44100() {
+        let signal: Vec<f32> = (0..22050).map(|i| i as f32 / 22050.0).collect();
+        let up = resample(&signal, 22050, 44100);
+        assert_eq!(up.len(), 44100);
+    }
+
+    #[test]
+    fn normalize_divides_by_max_abs() {
+        let signal = vec![2.0_f32, -4.0, 1.0];
+        let (norm, scale) = normalize(&signal);
+        assert!((scale - 4.0).abs() < 1e-6);
+        assert!((norm[0] - 0.5).abs() < 1e-6);
+        assert!((norm[1] - (-1.0)).abs() < 1e-6);
+        assert!((norm[2] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn denormalize_roundtrips_normalize() {
+        let signal = vec![1.0_f32, -2.0, 0.5, 0.0, 3.0];
+        let (norm, scale) = normalize(&signal);
+        let recovered = denormalize(&norm, scale);
+        for (a, b) in signal.iter().zip(recovered.iter()) {
+            assert!((a - b).abs() < 1e-6, "mismatch: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn interleave_stereo_produces_lr_pairs() {
+        let left = vec![1.0_f32, 2.0];
+        let right = vec![3.0_f32, 4.0];
+        let out = interleave_stereo(&left, &right);
+        assert_eq!(out, vec![1.0, 3.0, 2.0, 4.0]);
     }
 }
