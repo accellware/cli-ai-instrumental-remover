@@ -270,54 +270,54 @@ Track progress by checking off each item as it is completed.
 
 ### `src/pipeline.rs` — `run` Function
 
-- [ ] Implement `pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError>`
-- [ ] Set up `indicatif::MultiProgress` targeting stderr
+- [x] Implement `pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError>`
+- [x] Set up `indicatif::MultiProgress` targeting stderr
 
 ### Step 1 — Validate (spinner)
 
-- [ ] Verify `config.model_path` exists → `AppError::ModelNotFound`
-- [ ] Verify `input_path` exists → `AppError::InputVideoNotFound`
-- [ ] Load `model_data.json` from the model file's parent directory
-- [ ] Call `model_data::find_by_name` for the model filename
-- [ ] Create `config.output_dir` with `fs::create_dir_all` → `AppError::OutputDirCreate`
-- [ ] Finish spinner with `✓`
+- [x] Verify `config.model_path` exists → `AppError::ModelNotFound`
+- [x] Verify `input_path` exists → `AppError::InputVideoNotFound`
+- [x] Load `model_data.json` from the model file's parent directory
+- [x] Call `model_data::find_by_name` for the model filename
+- [x] Create `config.output_dir` with `fs::create_dir_all` → `AppError::OutputDirCreate`
+- [x] Finish spinner with `✓`
 
 ### Step 2 — Probe audio (spinner)
 
-- [ ] Call `ffmpeg::probe_audio(input_path)`
-- [ ] If no audio: compute `{output_dir}/{stem}_no_music.{ext}`, copy input file, print notice to stderr, return `Ok(())`
-- [ ] Finish spinner with `✓`
+- [x] Call `ffmpeg::probe_audio(input_path)`
+- [x] If no audio: compute `{output_dir}/{stem}_no_music.{ext}`, copy input file, print notice to stderr, return `Ok(())`
+- [x] Finish spinner with `✓`
 
 ### Step 3 — Extract audio (spinner)
 
-- [ ] Generate UUID-based temp paths in `std::env::temp_dir()`
-- [ ] Call `ffmpeg::extract_audio(input_path, &extracted_wav_path)`
-- [ ] Finish spinner with `✓`
+- [x] Generate UUID-based temp paths in `std::env::temp_dir()`
+- [x] Call `ffmpeg::extract_audio(input_path, &extracted_wav_path)`
+- [x] Finish spinner with `✓`
 
 ### Step 4 — Run inference (progress bar)
 
-- [ ] Construct `Separator::new(config, model_params)`
-- [ ] Call `separator.separate_vocals` with a `progress_cb` that updates the bar to percentage
-- [ ] Finish bar at 100%
+- [x] Construct `Separator::new(config, model_params)`
+- [x] Call `separator.separate_vocals` with a `progress_cb` that updates the bar to percentage
+- [x] Finish bar at 100%
 
 ### Step 5 — Remux (spinner)
 
-- [ ] Compute output path: `{output_dir}/{original_stem}_no_music.{original_ext}`
-- [ ] Call `ffmpeg::remux_with_audio(input_path, &vocals_wav_path, &output_path)`
-- [ ] Finish spinner with `✓`
+- [x] Compute output path: `{output_dir}/{original_stem}_no_music.{original_ext}`
+- [x] Call `ffmpeg::remux_with_audio(input_path, &vocals_wav_path, &output_path)`
+- [x] Finish spinner with `✓`
 
 ### Step 6 — Cleanup
 
-- [ ] `fs::remove_file` for extracted WAV; on failure, print warning to stderr
-- [ ] `fs::remove_file` for vocals WAV; on failure, print warning to stderr
-- [ ] Print `Done → {output_path}` to stderr
-- [ ] On any error in steps 1–5, attempt cleanup before returning the error
+- [x] `fs::remove_file` for extracted WAV; on failure, print warning to stderr
+- [x] `fs::remove_file` for vocals WAV; on failure, print warning to stderr
+- [x] Print `Done → {output_path}` to stderr
+- [x] On any error in steps 1–5, attempt cleanup before returning the error
 
 ### Tests — `pipeline.rs`
 
-- [ ] `run` with nonexistent input path → `AppError::InputVideoNotFound`
-- [ ] All previous tests still pass
-- [ ] `cargo build` succeeds
+- [x] `run` with nonexistent input path → `AppError::InputVideoNotFound`
+- [x] All previous tests still pass
+- [x] `cargo build` succeeds
 
 ---
 
