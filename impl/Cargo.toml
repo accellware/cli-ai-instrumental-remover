@@ -9,11 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # ort 2.x is still pre-release on crates.io; pin to the latest 2.x RC.
 ort = { version = "2.0.0-rc.12", features = ["cuda"] }
-# Temporarily optional to unblock pure-Rust prompts. Enable the
-# `ffmpeg` feature once the Windows ffmpeg-sys-next 7.1.3 build chain
-# is resolved (see specs/todo.md notes). Re-required by Prompts 4, 5,
-# 9, 10 — this gate is removed there.
-ffmpeg-next = { version = "7", optional = true }
+ffmpeg-next = { version = "8", optional = true }
 rustfft = "6"
 hound = "3"
 indicatif = "0.17"

@@ -21,8 +21,8 @@ mod imp {
         for stream in ictx.streams() {
             if stream.parameters().medium() == ffmpeg::media::Type::Audio {
                 let params = stream.parameters();
-                let sample_rate = params.rate() as u32;
-                let channels = params.channels() as u16;
+                let sample_rate = unsafe { (*params.as_ptr()).sample_rate as u32 };
+                let channels = unsafe { (*params.as_ptr()).ch_layout.nb_channels as u16 };
                 return Ok(Some(AudioInfo { sample_rate, channels }));
             }
         }
@@ -56,8 +56,8 @@ mod imp {
 
             (
                 in_stream.index(),
-                in_stream.parameters().rate() as u32,
-                in_stream.parameters().channels() as u16,
+                unsafe { (*in_stream.parameters().as_ptr()).sample_rate as u32 },
+                unsafe { (*in_stream.parameters().as_ptr()).ch_layout.nb_channels as u16 },
                 in_stream.time_base(),
             )
             // in_stream and out_stream are both dropped here
