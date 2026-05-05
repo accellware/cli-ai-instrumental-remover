@@ -29,13 +29,13 @@ music-separator --input interview.mp4
 
 ## Prerequisites
 
-| Dependency | Version | Notes |
-|---|---|---|
-| Rust toolchain | 1.76+ | `rustup update stable` |
-| FFmpeg shared libraries | 7.x or 8.x | Must be on `PATH` / `FFMPEG_DIR` |
-| LLVM / libclang | any recent | Required by `bindgen` at compile time |
-| ONNX Runtime | bundled via `ort` | Downloaded automatically |
-| CUDA + cuDNN | optional | Only for `execution_provider: "cuda"` |
+| Dependency              | Version           | Notes                                 |
+| ----------------------- | ----------------- | ------------------------------------- |
+| Rust toolchain          | 1.76+             | `rustup update stable`                |
+| FFmpeg shared libraries | 7.x or 8.x        | Must be on `PATH` / `FFMPEG_DIR`      |
+| LLVM / libclang         | any recent        | Required by `bindgen` at compile time |
+| ONNX Runtime            | bundled via `ort` | Downloaded automatically              |
+| CUDA + cuDNN            | optional          | Only for `execution_provider: "cuda"` |
 
 ### Installing FFmpeg (Windows)
 
@@ -132,12 +132,12 @@ Create `config.json` in the directory where you will run the binary:
 
 ### Fields
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `model_path` | string | yes | Relative or absolute path to the `.onnx` model file. The `model_data.json` must be in the **same directory**. |
-| `output_dir` | string | yes | Directory where the processed video is written. Created automatically if it does not exist. |
-| `execution_provider` | `"cpu"` \| `"cuda"` | yes | Inference device. Use `"cpu"` unless you have an NVIDIA GPU with CUDA installed. |
-| `chunk_size` | integer | yes | Number of audio samples processed per inference chunk. `261120` works well for most files. Reduce (e.g. `131072`) if you run out of memory. |
+| Field                | Type                | Required | Description                                                                                                                                 |
+| -------------------- | ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model_path`         | string              | yes      | Relative or absolute path to the `.onnx` model file. The `model_data.json` must be in the **same directory**.                               |
+| `output_dir`         | string              | yes      | Directory where the processed video is written. Created automatically if it does not exist.                                                 |
+| `execution_provider` | `"cpu"` \| `"cuda"` | yes      | Inference device. Use `"cpu"` unless you have an NVIDIA GPU with CUDA installed.                                                            |
+| `chunk_size`         | integer             | yes      | Number of audio samples processed per inference chunk. `261120` works well for most files. Reduce (e.g. `131072`) if you run out of memory. |
 
 ---
 
@@ -199,11 +199,11 @@ Options:
 All three models ship in `models/mdxnet/`. Point `model_path` at whichever fits
 your use case:
 
-| Model file | Primary stem | Best for |
-|---|---|---|
-| `UVR-MDX-NET-Voc_FT.onnx` | **Vocals** | Removing background music, keeping speech/singing |
-| `UVR_MDXNET_KARA_2.onnx` | **Instrumental** | Karaoke tracks, keeping the backing track |
-| `UVR-MDX-NET-Inst_HQ_3.onnx` | **Instrumental** | High-quality instrumental separation |
+| Model file                   | Primary stem     | Best for                                          |
+| ---------------------------- | ---------------- | ------------------------------------------------- |
+| `UVR-MDX-NET-Voc_FT.onnx`    | **Vocals**       | Removing background music, keeping speech/singing |
+| `UVR_MDXNET_KARA_2.onnx`     | **Instrumental** | Karaoke tracks, keeping the backing track         |
+| `UVR-MDX-NET-Inst_HQ_3.onnx` | **Instrumental** | High-quality instrumental separation              |
 
 The model output is whatever the model's `primary_stem` is — the binary always
 writes that stem's audio into the output video.
@@ -244,12 +244,12 @@ Done → output/silent_video_no_music.mp4
 The output filename is always `{original_stem}_no_music.{original_extension}`,
 placed under `output_dir`:
 
-| Input | Output |
-|---|---|
+| Input           | Output                          |
+| --------------- | ------------------------------- |
 | `interview.mp4` | `output/interview_no_music.mp4` |
-| `clip.mkv` | `output/clip_no_music.mkv` |
+| `clip.mkv`      | `output/clip_no_music.mkv`      |
 | `recording.mov` | `output/recording_no_music.mov` |
-| `session.avi` | `output/session_no_music.avi` |
+| `session.avi`   | `output/session_no_music.avi`   |
 
 The original file extension and video stream are preserved exactly (no
 re-encode). Only the audio track is replaced.
@@ -261,20 +261,20 @@ re-encode). Only the audio track is replaced.
 All errors are printed to **stderr** as `Error: <message>` and exit with
 code 1.
 
-| Error message | Cause | Fix |
-|---|---|---|
-| `config.json not found in current working directory` | `config.json` missing | Create `config.json` in the directory you run the binary from |
-| `failed to parse config.json: …` | Invalid JSON or missing/wrong field | Check the JSON syntax and all required fields |
-| `model file not found: <path>` | `model_path` in config does not exist | Verify the path points to the `.onnx` file |
-| `model_data.json not found at: <path>` | `model_data.json` missing from the model directory | Ensure `model_data.json` is in the same folder as the `.onnx` file |
-| `model not listed in model_data.json: <name>` | Model filename has no entry in `model_data.json` | Use one of the supported model filenames listed above |
-| `input video file not found: <path>` | The `--input` path does not exist | Check the path passed to `--input` |
-| `failed to create output directory: …` | Permission or path error | Check write access to the `output_dir` parent |
-| `ffmpeg probe failed: …` | FFmpeg could not open the input | Verify FFmpeg libraries are installed and the file is a valid media file |
-| `ffmpeg audio extraction failed: …` | FFmpeg demux error | Check FFmpeg installation; try running `ffprobe` on the file |
-| `ffmpeg remux failed: …` | FFmpeg mux error | Ensure the output directory is writable and has enough disk space |
-| `failed to load ONNX model: …` | ONNX Runtime could not open the model | Verify `model_path` points to a valid `.onnx` file |
-| `ONNX inference failed: …` | Runtime error during inference | Check available memory; try a smaller `chunk_size` |
+| Error message                                        | Cause                                              | Fix                                                                      |
+| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `config.json not found in current working directory` | `config.json` missing                              | Create `config.json` in the directory you run the binary from            |
+| `failed to parse config.json: …`                     | Invalid JSON or missing/wrong field                | Check the JSON syntax and all required fields                            |
+| `model file not found: <path>`                       | `model_path` in config does not exist              | Verify the path points to the `.onnx` file                               |
+| `model_data.json not found at: <path>`               | `model_data.json` missing from the model directory | Ensure `model_data.json` is in the same folder as the `.onnx` file       |
+| `model not listed in model_data.json: <name>`        | Model filename has no entry in `model_data.json`   | Use one of the supported model filenames listed above                    |
+| `input video file not found: <path>`                 | The `--input` path does not exist                  | Check the path passed to `--input`                                       |
+| `failed to create output directory: …`               | Permission or path error                           | Check write access to the `output_dir` parent                            |
+| `ffmpeg probe failed: …`                             | FFmpeg could not open the input                    | Verify FFmpeg libraries are installed and the file is a valid media file |
+| `ffmpeg audio extraction failed: …`                  | FFmpeg demux error                                 | Check FFmpeg installation; try running `ffprobe` on the file             |
+| `ffmpeg remux failed: …`                             | FFmpeg mux error                                   | Ensure the output directory is writable and has enough disk space        |
+| `failed to load ONNX model: …`                       | ONNX Runtime could not open the model              | Verify `model_path` points to a valid `.onnx` file                       |
+| `ONNX inference failed: …`                           | Runtime error during inference                     | Check available memory; try a smaller `chunk_size`                       |
 
 ### CUDA errors
 
