@@ -11,7 +11,7 @@ Track progress by checking off each item as it is completed.
 - [x] Create new Rust binary crate named `music-separator`
 - [x] Add all `[dependencies]` to `Cargo.toml`: `clap`, `serde`, `serde_json`, `ort`, `ffmpeg-next`, `rustfft`, `hound`, `indicatif`, `uuid`, `thiserror`, `anyhow`
 - [x] Add `[dev-dependencies]`: `tempfile`
-- [ ] Verify `cargo build` succeeds on a clean project _(blocked: FFmpeg dev libs missing on host — see notes)_
+- [x] Verify `cargo build` succeeds on a clean project
 
 ### Module Stubs
 
@@ -46,12 +46,13 @@ Track progress by checking off each item as it is completed.
 ### Tests — `error.rs`
 
 - [x] Unit test: every variant formats to a non-empty string via `to_string()`
-- [x] `cargo test` passes _(verified in isolated scratch crate; full-crate `cargo test` blocked on FFmpeg dev libs)_
+- [x] `cargo test` passes (1/1 against full crate)
 
 ### Notes
 
 - `ort` pinned to `2.0.0-rc.12` — no stable 2.x release on crates.io.
-- `cargo build` for the full crate is currently blocked because `ffmpeg-sys-next` requires system FFmpeg dev libs (vcpkg / pkg-config / `FFMPEG_DIR`). This must be resolved before Prompt 2 testing.
+- Build environment: installed FFmpeg 7.1 shared dev libs to `~/ffmpeg-7.1` and LLVM (for libclang) to `C:\Program Files\LLVM`. Paths are wired via gitignored `impl/.cargo/config.toml`'s `[env]` block.
+- **`ffmpeg-next` made `optional = true` and gated behind a `ffmpeg` feature** in `Cargo.toml`. Reason: `ffmpeg-sys-next 7.1.3` has hardcoded `size_of` assertions that don't match FFmpeg 7.1's opaque-struct API on Windows (10 layout errors against multiple `AVFilter*` types and `tm`). Re-enabling will be addressed in Prompt 4 — likely by bumping to `ffmpeg-next 8.x` or pinning to a known-good `ffmpeg-sys-next` version.
 
 ---
 
