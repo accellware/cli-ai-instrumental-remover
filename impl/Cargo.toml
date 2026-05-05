@@ -1,0 +1,21 @@
+[package]
+name = "music-separator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ort 2.x is still pre-release on crates.io; pin to the latest 2.x RC.
+ort = { version = "2.0.0-rc.12", features = ["cuda"] }
+ffmpeg-next = "7"
+rustfft = "6"
+hound = "3"
+indicatif = "0.17"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "1"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

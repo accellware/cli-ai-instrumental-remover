@@ -8,45 +8,50 @@ Track progress by checking off each item as it is completed.
 
 ### Cargo Setup
 
-- [ ] Create new Rust binary crate named `music-separator`
-- [ ] Add all `[dependencies]` to `Cargo.toml`: `clap`, `serde`, `serde_json`, `ort`, `ffmpeg-next`, `rustfft`, `hound`, `indicatif`, `uuid`, `thiserror`, `anyhow`
-- [ ] Add `[dev-dependencies]`: `tempfile`
-- [ ] Verify `cargo build` succeeds on a clean project
+- [x] Create new Rust binary crate named `music-separator`
+- [x] Add all `[dependencies]` to `Cargo.toml`: `clap`, `serde`, `serde_json`, `ort`, `ffmpeg-next`, `rustfft`, `hound`, `indicatif`, `uuid`, `thiserror`, `anyhow`
+- [x] Add `[dev-dependencies]`: `tempfile`
+- [ ] Verify `cargo build` succeeds on a clean project _(blocked: FFmpeg dev libs missing on host — see notes)_
 
 ### Module Stubs
 
-- [ ] Create `src/main.rs` with all `mod` declarations
-- [ ] Create `src/error.rs` stub
-- [ ] Create `src/config.rs` stub
-- [ ] Create `src/model_data.rs` stub
-- [ ] Create `src/ffmpeg.rs` stub
-- [ ] Create `src/inference.rs` stub
-- [ ] Create `src/pipeline.rs` stub
+- [x] Create `src/main.rs` with all `mod` declarations
+- [x] Create `src/error.rs` stub
+- [x] Create `src/config.rs` stub
+- [x] Create `src/model_data.rs` stub
+- [x] Create `src/ffmpeg.rs` stub
+- [x] Create `src/inference.rs` stub
+- [x] Create `src/pipeline.rs` stub
 
 ### `src/error.rs` — AppError Enum
 
-- [ ] Define `AppError` enum with `thiserror`
-- [ ] `ConfigNotFound` variant with human-readable `#[error]` message
-- [ ] `ConfigParse(String)` variant
-- [ ] `ModelNotFound(PathBuf)` variant
-- [ ] `ModelDataNotFound(PathBuf)` variant
-- [ ] `ModelDataParse(String)` variant
-- [ ] `ModelNotInRegistry(String)` variant
-- [ ] `InputVideoNotFound(PathBuf)` variant
-- [ ] `OutputDirCreate(String)` variant
-- [ ] `FfmpegProbe(String)` variant
-- [ ] `FfmpegExtract(String)` variant
-- [ ] `FfmpegRemux(String)` variant
-- [ ] `OnnxLoad(String)` variant
-- [ ] `OnnxInference(String)` variant
-- [ ] `AudioRead(String)` variant
-- [ ] `AudioWrite(String)` variant
-- [ ] `FileCopy(String)` variant
+- [x] Define `AppError` enum with `thiserror`
+- [x] `ConfigNotFound` variant with human-readable `#[error]` message
+- [x] `ConfigParse(String)` variant
+- [x] `ModelNotFound(PathBuf)` variant
+- [x] `ModelDataNotFound(PathBuf)` variant
+- [x] `ModelDataParse(String)` variant
+- [x] `ModelNotInRegistry(String)` variant
+- [x] `InputVideoNotFound(PathBuf)` variant
+- [x] `OutputDirCreate(String)` variant
+- [x] `FfmpegProbe(String)` variant
+- [x] `FfmpegExtract(String)` variant
+- [x] `FfmpegRemux(String)` variant
+- [x] `OnnxLoad(String)` variant
+- [x] `OnnxInference(String)` variant
+- [x] `AudioRead(String)` variant
+- [x] `AudioWrite(String)` variant
+- [x] `FileCopy(String)` variant
 
 ### Tests — `error.rs`
 
-- [ ] Unit test: every variant formats to a non-empty string via `to_string()`
-- [ ] `cargo test` passes
+- [x] Unit test: every variant formats to a non-empty string via `to_string()`
+- [x] `cargo test` passes _(verified in isolated scratch crate; full-crate `cargo test` blocked on FFmpeg dev libs)_
+
+### Notes
+
+- `ort` pinned to `2.0.0-rc.12` — no stable 2.x release on crates.io.
+- `cargo build` for the full crate is currently blocked because `ffmpeg-sys-next` requires system FFmpeg dev libs (vcpkg / pkg-config / `FFMPEG_DIR`). This must be resolved before Prompt 2 testing.
 
 ---
 
