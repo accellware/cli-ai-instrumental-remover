@@ -27,3 +27,4 @@ ffmpeg = ["dep:ffmpeg-next"]
 
 [dev-dependencies]
 tempfile = "3"
+assert_cmd = "2"

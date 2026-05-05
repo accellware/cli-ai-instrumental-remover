@@ -325,27 +325,27 @@ Track progress by checking off each item as it is completed.
 
 ### `src/main.rs`
 
-- [ ] Define `Args` struct with `clap` derive: `--input <PathBuf>`
-- [ ] Set `name = "music-separator"` and `about` description on the command
-- [ ] Call `config::load()`, print error to stderr and `exit(1)` on failure
-- [ ] Call `pipeline::run(&args.input, &config)`, print error to stderr and `exit(1)` on failure
-- [ ] No `?` or `anyhow` in `main` — all errors handled explicitly
+- [x] Define `Args` struct with `clap` derive: `--input <PathBuf>`
+- [x] Set `name = "music-separator"` and `about` description on the command
+- [x] Call `config::load()`, print error to stderr and `exit(1)` on failure
+- [x] Call `pipeline::run(&args.input, &config)`, print error to stderr and `exit(1)` on failure
+- [x] No `?` or `anyhow` in `main` — all errors handled explicitly
 
 ### `tests/integration_test.rs`
 
-- [ ] Add `assert_cmd = "2"` to `[dev-dependencies]` in `Cargo.toml`
-- [ ] Test: `cli_exits_1_when_no_config` — run in temp dir without `config.json`, assert exit code 1 and stderr contains "config"
-- [ ] Test: `cli_exits_1_when_input_not_found` — valid config, nonexistent `--input`, assert exit code 1 and stderr contains the missing path
-- [ ] Test: `cli_shows_help` — run with `--help`, assert exit code 0 and stdout contains `--input`
+- [x] Add `assert_cmd = "2"` to `[dev-dependencies]` in `Cargo.toml`
+- [x] Test: `cli_exits_1_when_no_config` — run in temp dir without `config.json`, assert exit code 1 and stderr contains "config"
+- [x] Test: `cli_exits_1_when_input_not_found` — valid config, nonexistent `--input`, assert exit code 1 and stderr contains the missing path
+- [x] Test: `cli_shows_help` — run with `--help`, assert exit code 0 and stdout contains `--input`
 
 ### Final Verification
 
-- [ ] `cargo test` — all unit and integration tests pass
-- [ ] `cargo build --release` — release binary builds without errors or warnings
-- [ ] Binary prints help with `--help`
-- [ ] Binary exits 1 with clear message when `config.json` is absent
-- [ ] Binary exits 1 with clear message when `--input` file does not exist
-- [ ] Binary exits 1 with clear message when model file in config does not exist
+- [x] `cargo test` — all unit and integration tests pass (29/29)
+- [x] `cargo build --release` — release binary builds without errors or warnings
+- [x] Binary prints help with `--help`
+- [x] Binary exits 1 with clear message when `config.json` is absent
+- [x] Binary exits 1 with clear message when `--input` file does not exist
+- [x] Binary exits 1 with clear message when model file in config does not exist
 
 ---
 
