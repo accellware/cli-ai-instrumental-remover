@@ -1,0 +1,50 @@
+{
+    "77d07b2667ddf05b9e3175941b4454a0": {
+        "compensate": 1.021,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 7680,
+        "primary_stem": "Vocals",
+        "name": "UVR-MDX-NET-Voc_FT.onnx"
+    },
+    "1d64a6d2c30f709b8c9b4ce1366d96ee": {
+        "compensate": 1.035,
+        "mdx_dim_f_set": 2048,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 5120,
+        "primary_stem": "Instrumental",
+        "name": "UVR_MDXNET_KARA_2.onnx"
+    },
+    "cd5b2989ad863f116c855db1dfe24e39": {
+        "compensate": 1.035,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 9,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Other",
+        "name": "Reverb_HQ_By_FoxJoy.onnx"
+    },
+    "55657dd70583b0fedfba5f67df11d711": {
+        "compensate": 1.022,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Instrumental",
+        "name": "UVR-MDX-NET-Inst_HQ_3.onnx"
+    },
+    "cc63408db3d80b4d85b0287d1d7c9632": {
+        "compensate": 1.033,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Instrumental",
+        "name": "UVR-MDX-NET-Inst_HQ_2.onnx"
+    },
+    "0f2a6bc5b49d87d64728ee40e23bceb1": {
+        "compensate": 1.022,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Instrumental",
+        "name": "UVR-MDX-NET-Inst_HQ_4.onnx"
+    }
+}
