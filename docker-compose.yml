@@ -1,0 +1,31 @@
+services:
+  music-separator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: music-separator:latest
+    # Override on the CLI:
+    #   docker compose run --rm music-separator --input /inputs/clip.mp4
+    command: ["--help"]
+    volumes:
+      - ./inputs:/inputs:ro
+      - ./out:/out
+
+  music-separator-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: music-separator:gpu
+    # Override on the CLI:
+    #   docker compose run --rm music-separator-gpu --input /inputs/clip.mp4
+    command: ["--help"]
+    volumes:
+      - ./inputs:/inputs:ro
+      - ./out:/out
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,14 @@
+**/.git
+**/.gitignore
+**/target
+**/out
+**/.vscode
+**/.claude
+**/*.md
+**/.cargo/config.toml
+
+tests
+specs
+add-ffmpeg-path.ps1
+
+# Keep .dockerignore focused: do NOT ignore impl/, models/, or docker/.

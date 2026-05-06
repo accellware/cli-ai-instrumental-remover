@@ -11,7 +11,8 @@
       "Bash(cargo run *)",
       "Bash(/d/Workspace/Playground/AI/MusicSeparator/impl/target/debug/music-separator.exe -vv --input nonexistent.mp4)",
       "Bash(./target/release/music-separator.exe -vv --input ../tests/raw_vid_10s.mp4)",
-      "Bash(./target/release/music-separator.exe -v --input ../tests/raw_vid_10s.mp4)"
+      "Bash(./target/release/music-separator.exe -v --input ../tests/raw_vid_10s.mp4)",
+      "Bash(Select-Object -First 50)"
     ]
   }
 }

@@ -1,11 +1,12 @@
-use std::path::Path;
-use std::fs;
-use uuid::Uuid;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use crate::config::Config;
 use crate::error::AppError;
-use crate::{logging, model_data, ffmpeg};
 use crate::inference::Separator;
+use crate::{ffmpeg, logging, model_data};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::fs;
+use std::path::Path;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,26 @@ fn make_spinner(mp: &MultiProgress, msg: &'static str) -> ProgressBar {
     pb.set_message(msg);
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
     pb
+}
+
+fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    let millis = elapsed.subsec_millis();
+
+    if secs < 60 {
+        format!("{secs}.{millis:03}s")
+    } else {
+        let mins = secs / 60;
+        let rem_secs = secs % 60;
+        format!("{mins}m {rem_secs}.{millis:03}s")
+    }
+}
+
+fn finish_step(pb: &ProgressBar, msg: &str, started_at: Instant) {
+    pb.finish_with_message(format!(
+        "{msg} ✓ ({})",
+        format_elapsed(started_at.elapsed())
+    ));
 }
 
 /// Attempt to delete a temp file, warning (via tracing) on failure.
@@ -55,6 +76,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
 
     // ── Step 1: Validate ───────────────────────────────────────────────────────
     tracing::info!("[1/5] validating inputs");
+    let step1_started_at = Instant::now();
     let pb1 = make_spinner(&mp, "[1/5] Validating inputs...");
 
     if !config.model_path.exists() {
@@ -72,14 +94,16 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         .unwrap_or_else(|| Path::new("."))
         .join("model_data.json");
 
-    let model_params_list = model_data::load(&model_data_path)
-        .inspect_err(|_| pb1.abandon())?;
+    let model_params_list = model_data::load(&model_data_path).inspect_err(|_| pb1.abandon())?;
 
     let model_filename = config
         .model_path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| { pb1.abandon(); AppError::ModelNotFound(config.model_path.clone()) })?;
+        .ok_or_else(|| {
+            pb1.abandon();
+            AppError::ModelNotFound(config.model_path.clone())
+        })?;
 
     let model_params = model_data::find_by_name(&model_params_list, model_filename)
         .inspect_err(|_| pb1.abandon())?
@@ -89,10 +113,11 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         .map_err(|e| AppError::OutputDirCreate(e.to_string()))
         .inspect_err(|_| pb1.abandon())?;
 
-    pb1.finish_with_message("[1/5] Validating inputs... ✓");
+    finish_step(&pb1, "[1/5] Validating inputs...", step1_started_at);
 
     // ── Step 2: Probe audio ────────────────────────────────────────────────────
     tracing::info!("[2/5] probing audio stream");
+    let step2_started_at = Instant::now();
     let pb2 = make_spinner(&mp, "[2/5] Probing audio...");
 
     let audio_info = ffmpeg::probe_audio(input_path)?;
@@ -106,14 +131,13 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
             format!("{}_no_music.{}", stem, ext)
         };
         let output_path = config.output_dir.join(&out_name);
-        fs::copy(input_path, &output_path)
-            .map_err(|e| AppError::FileCopy(e.to_string()))?;
+        fs::copy(input_path, &output_path).map_err(|e| AppError::FileCopy(e.to_string()))?;
         tracing::info!(
             output = %output_path.display(),
             "no audio track found; copied input verbatim"
         );
         eprintln!("No audio track found; copying file to output.");
-        pb2.finish_with_message("[2/5] Probing audio... ✓");
+        finish_step(&pb2, "[2/5] Probing audio...", step2_started_at);
         return Ok(());
     }
 
@@ -125,10 +149,11 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         );
     }
 
-    pb2.finish_with_message("[2/5] Probing audio... ✓");
+    finish_step(&pb2, "[2/5] Probing audio...", step2_started_at);
 
     // ── Step 3: Extract audio ──────────────────────────────────────────────────
     tracing::info!("[3/5] extracting audio to temp WAV");
+    let step3_started_at = Instant::now();
     let pb3 = make_spinner(&mp, "[3/5] Extracting audio...");
 
     let temp_dir = std::env::temp_dir();
@@ -146,10 +171,11 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         return Err(e);
     }
 
-    pb3.finish_with_message("[3/5] Extracting audio... ✓");
+    finish_step(&pb3, "[3/5] Extracting audio...", step3_started_at);
 
     // ── Step 4: Run inference ──────────────────────────────────────────────────
     tracing::info!("[4/5] running ONNX inference");
+    let step4_started_at = Instant::now();
     let pb4 = mp.add(ProgressBar::new(100));
     pb4.set_style(
         ProgressStyle::default_bar()
@@ -174,10 +200,11 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     }
 
     pb4.set_position(100);
-    pb4.finish_with_message("[4/5] Running inference...");
+    finish_step(&pb4, "[4/5] Running inference...", step4_started_at);
 
     // ── Step 5: Remux ──────────────────────────────────────────────────────────
     tracing::info!("[5/5] remuxing video with isolated stem");
+    let step5_started_at = Instant::now();
     let pb5 = make_spinner(&mp, "[5/5] Remuxing video...");
 
     let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -194,7 +221,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         return Err(e);
     }
 
-    pb5.finish_with_message("[5/5] Remuxing video... ✓");
+    finish_step(&pb5, "[5/5] Remuxing video...", step5_started_at);
 
     // ── Step 6: Cleanup ────────────────────────────────────────────────────────
     tracing::debug!("cleaning up temp files");

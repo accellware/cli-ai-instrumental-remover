@@ -1,0 +1,132 @@
+# syntax=docker/dockerfile:1.6
+#
+# GPU-enabled build for music-separator (CUDA execution provider).
+#
+# Host requires:
+#   - NVIDIA driver supporting CUDA 12.6+
+#   - nvidia-container-toolkit (Docker runtime integration)
+#
+# Run:
+#   docker build -f Dockerfile.gpu -t music-separator:gpu .
+#   docker run --rm --gpus all \
+#       -v $PWD/inputs:/inputs:ro -v $PWD/out:/out \
+#       music-separator:gpu --input /inputs/clip.mp4
+#
+# FFmpeg 8.1.1 is built from source on the same Ubuntu base used at runtime
+# so the .so glibc/CXXABI matches.
+
+ARG CUDA_VERSION=12.6.3
+ARG UBUNTU_VERSION=24.04
+ARG FFMPEG_VERSION=8.1.1
+ARG FFMPEG_PREFIX=/opt/ffmpeg
+
+# ---------- ffmpeg-build ----------
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS ffmpeg-build
+
+ARG FFMPEG_VERSION
+ARG FFMPEG_PREFIX
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    nasm \
+    yasm \
+    pkg-config \
+    ca-certificates \
+    curl \
+    xz-utils \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o ffmpeg.tar.xz \
+    && tar -xJf ffmpeg.tar.xz \
+    && cd "ffmpeg-${FFMPEG_VERSION}" \
+    && ./configure \
+    --prefix="${FFMPEG_PREFIX}" \
+    --enable-shared \
+    --disable-static \
+    --disable-doc \
+    --disable-debug \
+    --enable-pic \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf "/tmp/ffmpeg-${FFMPEG_VERSION}" /tmp/ffmpeg.tar.xz
+
+# ---------- builder ----------
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS builder
+
+ARG FFMPEG_PREFIX
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    clang \
+    libclang-dev \
+    libssl-dev \
+    pkg-config \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# rustup, stable toolchain (matches rust:1-trixie used by the CPU Dockerfile).
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/cuda/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
+
+COPY --from=ffmpeg-build ${FFMPEG_PREFIX} ${FFMPEG_PREFIX}
+ENV PKG_CONFIG_PATH=${FFMPEG_PREFIX}/lib/pkgconfig
+ENV LD_LIBRARY_PATH=${FFMPEG_PREFIX}/lib
+
+WORKDIR /build
+
+COPY impl/Cargo.toml impl/Cargo.lock ./
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
+    && cargo fetch --locked \
+    && rm -rf src
+
+COPY impl/src ./src
+COPY impl/tests ./tests
+
+RUN cargo build --release --features ffmpeg --locked \
+    && strip target/release/music-separator \
+    && mkdir -p /opt/onnxruntime/lib \
+    && find target/release -maxdepth 1 -type f -name 'libonnxruntime*.so*' -exec cp -v {} /opt/onnxruntime/lib/ \; \
+    && if [ -d /root/.cache/ort.pyke.io ]; then find /root/.cache/ort.pyke.io -type f -name 'libonnxruntime*.so*' -exec cp -n {} /opt/onnxruntime/lib/ \; ; fi \
+    && test -f /opt/onnxruntime/lib/libonnxruntime_providers_shared.so
+
+# ---------- runtime ----------
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+
+ARG FFMPEG_PREFIX
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ffmpeg-build ${FFMPEG_PREFIX} ${FFMPEG_PREFIX}
+
+# /usr/local/cuda/lib64 is already on LD_LIBRARY_PATH from the base image;
+# prepend the FFmpeg prefix so its libs win, and add ffmpeg to PATH.
+ENV LD_LIBRARY_PATH=/app:${FFMPEG_PREFIX}/lib:/usr/local/cuda/lib64
+ENV PATH=${FFMPEG_PREFIX}/bin:${PATH}
+
+# nvidia-container-toolkit reads these to expose driver caps to the container.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+WORKDIR /app
+
+COPY --from=builder /build/target/release/music-separator /usr/local/bin/music-separator
+COPY --from=builder /opt/onnxruntime/lib/ /app/
+COPY models/mdxnet /app/models/mdxnet
+COPY docker/config.cuda.json /app/config.json
+
+RUN mkdir -p /inputs /out
+VOLUME ["/inputs", "/out"]
+
+ENTRYPOINT ["music-separator"]
+CMD ["--help"]

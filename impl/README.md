@@ -17,14 +17,15 @@ music-separator --input interview.mp4
 2. [Build](#build)
 3. [Setup](#setup)
 4. [Configuration](#configuration)
-5. [Running](#running)
-6. [Available Models](#available-models)
-7. [Progress Output](#progress-output)
-8. [Logging](#logging)
-9. [Output Naming](#output-naming)
-10. [Error Reference](#error-reference)
-11. [CUDA / GPU Acceleration](#cuda--gpu-acceleration)
-12. [Development](#development)
+5. [Docker Image Preparation](#docker-image-preparation)
+6. [Running](#running)
+7. [Available Models](#available-models)
+8. [Progress Output](#progress-output)
+9. [Logging](#logging)
+10. [Output Naming](#output-naming)
+11. [Error Reference](#error-reference)
+12. [CUDA / GPU Acceleration](#cuda--gpu-acceleration)
+13. [Development](#development)
 
 ---
 
@@ -139,6 +140,104 @@ Create `config.json` in the directory where you will run the binary:
 | `output_dir`         | string              | yes      | Directory where the processed video is written. Created automatically if it does not exist.                                                 |
 | `execution_provider` | `"cpu"` \| `"cuda"` | yes      | Inference device. Use `"cpu"` unless you have an NVIDIA GPU with CUDA installed.                                                            |
 | `chunk_size`         | integer             | yes      | Number of audio samples processed per inference chunk. `261120` works well for most files. Reduce (e.g. `131072`) if you run out of memory. |
+
+---
+
+## Docker Image Preparation
+
+These steps package the CLI and models into Docker images so you can run the
+tool without installing Rust/FFmpeg on the host.
+
+Run all Docker commands from the **repository root** (the directory that
+contains `Dockerfile`, `Dockerfile.gpu`, and `docker-compose.yml`).
+
+### What is already in the repo
+
+- `Dockerfile` for CPU execution (`execution_provider: "cpu"`)
+- `Dockerfile.gpu` for NVIDIA GPU execution (`execution_provider: "cuda"`)
+- `docker/config.json` (CPU container config)
+- `docker/config.cuda.json` (GPU container config)
+- `docker-compose.yml` with services `music-separator` and `music-separator-gpu`
+
+### Step 1: Prepare input/output folders
+
+```powershell
+New-Item -ItemType Directory -Force inputs, out | Out-Null
+Copy-Item tests/raw_vid.mp4 inputs/
+```
+
+### Step 2: Build the CPU image
+
+```bash
+docker compose build music-separator
+```
+
+Optional direct build:
+
+```bash
+docker build -t music-separator:latest .
+```
+
+### Step 3: Run the CPU container
+
+```bash
+docker compose run --rm music-separator --input /inputs/raw_vid.mp4
+```
+
+Expected output file:
+
+```text
+out/raw_vid_no_music.mp4
+```
+
+### Step 4: Verify GPU host prerequisites (GPU only)
+
+Requirements:
+
+- NVIDIA driver with CUDA 12.4+ support
+- `nvidia-container-toolkit` installed and configured for Docker
+
+Quick validation:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
+
+### Step 5: Build the GPU image
+
+```bash
+docker compose build music-separator-gpu
+```
+
+Optional direct build:
+
+```bash
+docker build -f Dockerfile.gpu -t music-separator:gpu .
+```
+
+### Step 6: Run the GPU container
+
+```bash
+docker compose run --rm music-separator-gpu --input /inputs/raw_vid.mp4
+```
+
+If your Compose environment does not pass GPU devices through, use:
+
+```bash
+docker run --rm --gpus all \
+  -v ${PWD}/inputs:/inputs:ro \
+  -v ${PWD}/out:/out \
+  music-separator:gpu --input /inputs/raw_vid.mp4
+```
+
+### Notes
+
+- Both images bake `models/mdxnet/*` into `/app/models/mdxnet`.
+- The container uses `/app/config.json` copied from:
+  - `docker/config.json` for CPU image
+  - `docker/config.cuda.json` for GPU image
+- First build is slow (FFmpeg 8.1.1 from source + release Rust build); later
+  builds reuse Docker layer cache.
 
 ---
 
