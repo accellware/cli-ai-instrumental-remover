@@ -24,8 +24,7 @@ fn cli_exits_1_when_input_not_found() {
     let config_content = r#"{
         "model_path": "/nonexistent/model.onnx",
         "output_dir": "./output",
-        "execution_provider": "cpu",
-        "chunk_size": 261120
+        "execution_provider": "cpu"
     }"#;
     fs::write(dir.path().join("config.json"), config_content).unwrap();
 

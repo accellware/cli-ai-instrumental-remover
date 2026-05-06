@@ -1,6 +1,5 @@
 {
     "model_path": "/app/models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
     "output_dir": "/out",
-    "execution_provider": "cuda",
-    "chunk_size": 261120
+    "execution_provider": "cuda"
 }

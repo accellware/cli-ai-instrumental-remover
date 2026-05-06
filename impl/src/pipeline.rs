@@ -250,7 +250,6 @@ mod tests {
             model_path: exe.clone(),
             output_dir: std::env::temp_dir().join("ms_test_output"),
             execution_provider: ExecutionProvider::Cpu,
-            chunk_size: 261120,
         };
         let result = run(Path::new("/nonexistent/video.mp4"), &config);
         assert!(

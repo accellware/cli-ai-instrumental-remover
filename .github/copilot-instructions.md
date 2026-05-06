@@ -81,12 +81,11 @@ cargo test
 {
   "model_path": "models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
   "output_dir": "./output",
-  "execution_provider": "cpu",
-  "chunk_size": 261120
+  "execution_provider": "cpu"
 }
 ```
 
-`model_data.json` must be co-located with the `.onnx` file.
+`model_data.json` must be co-located with the `.onnx` file. The per-inference chunk length is fixed by the model architecture (`1024 * ((1 << mdx_dim_t_set) - 1)`) and is not user-configurable.
 
 ## Dependencies
 

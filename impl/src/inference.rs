@@ -1,12 +1,29 @@
-// DSP primitives — pure Rust, no ONNX, no FFmpeg.
-// Implemented in Prompt 6.
-// Prompt 8 adds the Separator struct and separate_vocals method.
+// DSP primitives + Separator (ONNX session + chunk loop).
+//
+// Hot-path design notes
+// ─────────────────────
+// The chunk loop in `Separator::separate_vocals` avoids per-chunk allocations:
+//   * FFT plans (forward + inverse) and their scratch buffers are built once.
+//   * The padded-input, FFT, tensor-input, output-spectrum, OLA accumulator
+//     and chunk-time buffers are owned by `Separator` and reused.
+//   * STFT writes directly into the ONNX tensor layout — no `Vec<Vec<...>>`.
+//   * The ORT input tensor is a borrowed view (`TensorRef::from_array_view`)
+//     of the reusable input buffer; ownership is not transferred per call.
+//   * Outer overlap-add accumulates straight into the final output buffer;
+//     the previous `output_chunks: Vec<Vec<f32>>` staging is gone.
 
 use std::path::Path;
-use rustfft::{FftPlanner, num_complex::Complex};
+use std::sync::Arc;
+use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use crate::config::{Config, ExecutionProvider};
 use crate::model_data::ModelParams;
 use crate::error::AppError;
+
+/// MDX-Net STFT hop length (samples). Fixed by the model architecture: every
+/// shipped MDX-Net model uses a 1024-sample hop, regardless of `mdx_n_fft_scale_set`.
+/// The chunk length fed to the model is then `HOP_LENGTH * (n_time_model - 1)`,
+/// where `n_time_model = 1 << params.mdx_dim_t_set`.
+const HOP_LENGTH: usize = 1024;
 
 /// Symmetric Hann window of length `size`.
 ///
@@ -30,17 +47,10 @@ pub fn hann_window(size: usize) -> Vec<f32> {
     }
 }
 
-/// Short-Time Fourier Transform.
+/// Short-Time Fourier Transform (allocating reference implementation, used by tests).
 ///
-/// Steps
-/// 1. Centre-pad `signal` with `fft_size / 2` zeros on each side.
-/// 2. Slide a window of width `fft_size` in steps of `hop_length` over the
-///    padded signal.
-/// 3. For each frame: multiply by `window`, run a forward FFT, keep the
-///    one-sided spectrum (`fft_size / 2 + 1` bins).
-///
-/// Returns `Vec<Vec<[f32; 2]>>` — outer = frames, inner = bins, each bin
-/// is `[real, imag]`.
+/// The hot path uses `Separator`'s reusable buffers instead.
+#[allow(dead_code)]
 pub fn stft(
     signal: &[f32],
     fft_size: usize,
@@ -53,28 +63,24 @@ pub fn stft(
 
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(fft_size);
+    let mut scratch = vec![Complex::<f32> { re: 0.0, im: 0.0 }; fft.get_inplace_scratch_len()];
+    let mut buf = vec![Complex::<f32> { re: 0.0, im: 0.0 }; fft_size];
 
     let n_bins = fft_size / 2 + 1;
     let mut frames = Vec::new();
     let mut pos = 0;
 
     while pos + fft_size <= padded.len() {
-        // Apply window and convert to complex.
-        let mut buf: Vec<Complex<f32>> = padded[pos..pos + fft_size]
-            .iter()
-            .zip(window.iter())
-            .map(|(&s, &w)| Complex { re: s * w, im: 0.0 })
-            .collect();
+        for i in 0..fft_size {
+            buf[i] = Complex { re: padded[pos + i] * window[i], im: 0.0 };
+        }
+        fft.process_with_scratch(&mut buf, &mut scratch);
 
-        fft.process(&mut buf);
-
-        // Keep only the one-sided (positive-frequency) spectrum.
-        frames.push(
-            buf[..n_bins]
-                .iter()
-                .map(|c| [c.re, c.im])
-                .collect::<Vec<_>>(),
-        );
+        let mut frame = Vec::with_capacity(n_bins);
+        for c in &buf[..n_bins] {
+            frame.push([c.re, c.im]);
+        }
+        frames.push(frame);
 
         pos += hop_length;
     }
@@ -82,23 +88,8 @@ pub fn stft(
     frames
 }
 
-/// Inverse Short-Time Fourier Transform.
-///
-/// Reconstructs the time-domain signal from one-sided STFT frames produced
-/// by [`stft`] using overlap-add (OLA) synthesis.
-///
-/// Steps
-/// 1. Allocate an OLA buffer of length `(frames.len()-1)*hop_length + fft_size`
-///    (padded to at least `fft_size/2 + signal_length` to handle the trim).
-/// 2. For each frame:
-///    a. Reconstruct the full conjugate-symmetric complex spectrum.
-///    b. Run an inverse FFT and normalise by `1 / fft_size`.
-///    c. Multiply by `window` and overlap-add into the output buffer.
-///    d. Accumulate `window[i]²` into a normalisation buffer.
-/// 3. Divide each output sample by its accumulated window energy (skip
-///    positions where the energy is < 1e-8 to avoid division by zero).
-/// 4. Strip the centre-padding offset: return
-///    `output[fft_size/2 .. fft_size/2 + signal_length]`.
+/// Inverse Short-Time Fourier Transform (allocating reference implementation, used by tests).
+#[allow(dead_code)]
 pub fn istft(
     frames: &[Vec<[f32; 2]>],
     fft_size: usize,
@@ -108,14 +99,11 @@ pub fn istft(
 ) -> Vec<f32> {
     let n_bins = fft_size / 2 + 1;
 
-    // OLA buffer covers all frames.
     let ola_length = if frames.is_empty() {
         fft_size
     } else {
         (frames.len() - 1) * hop_length + fft_size
     };
-
-    // Must also be long enough that we can read fft_size/2..fft_size/2+signal_length.
     let buf_len = ola_length.max(fft_size / 2 + signal_length);
 
     let mut output = vec![0.0_f32; buf_len];
@@ -123,30 +111,27 @@ pub fn istft(
 
     let mut planner = FftPlanner::<f32>::new();
     let ifft = planner.plan_fft_inverse(fft_size);
+    let mut scratch = vec![Complex::<f32> { re: 0.0, im: 0.0 }; ifft.get_inplace_scratch_len()];
+    let mut buf = vec![Complex::<f32> { re: 0.0, im: 0.0 }; fft_size];
+
+    let inv_n = 1.0_f32 / fft_size as f32;
 
     for (frame_idx, frame) in frames.iter().enumerate() {
         let frame_start = frame_idx * hop_length;
 
-        // --- Reconstruct full conjugate-symmetric spectrum ---
-        let mut buf = vec![Complex { re: 0.0_f32, im: 0.0_f32 }; fft_size];
-
-        // Positive-frequency bins (0..n_bins) are stored as-is.
+        for c in buf.iter_mut() {
+            *c = Complex { re: 0.0, im: 0.0 };
+        }
         for i in 0..n_bins {
             buf[i] = Complex { re: frame[i][0], im: frame[i][1] };
         }
-
-        // Negative-frequency bins (n_bins..fft_size) are conjugate mirrors.
-        // bin[fft_size - i] = conj(bin[i]) for i in 1..n_bins-1
         for i in n_bins..fft_size {
-            let j = fft_size - i; // j falls in 1..n_bins-1
+            let j = fft_size - i;
             buf[i] = Complex { re: frame[j][0], im: -frame[j][1] };
         }
 
-        // --- IFFT + scale ---
-        ifft.process(&mut buf);
-        let inv_n = 1.0_f32 / fft_size as f32;
+        ifft.process_with_scratch(&mut buf, &mut scratch);
 
-        // --- Window, overlap-add, and accumulate window energy ---
         for (i, c) in buf.iter().enumerate() {
             let sample = c.re * inv_n * window[i];
             output[frame_start + i] += sample;
@@ -154,21 +139,18 @@ pub fn istft(
         }
     }
 
-    // --- OLA normalisation ---
     for (o, &n) in output.iter_mut().zip(norm.iter()) {
         if n > 1e-8 {
             *o /= n;
         }
     }
 
-    // --- Trim: remove the centre-pad offset added by stft ---
     let trim_start = fft_size / 2;
     let trim_end = trim_start + signal_length;
 
     if trim_end <= output.len() {
         output[trim_start..trim_end].to_vec()
     } else {
-        // Edge case: buffer shorter than expected — pad with zeros.
         let mut result = output[trim_start..].to_vec();
         result.resize(signal_length, 0.0);
         result
@@ -176,10 +158,6 @@ pub fn istft(
 }
 
 /// Resample `signal` from `from_rate` Hz to `to_rate` Hz using linear interpolation.
-///
-/// Special cases:
-/// - `from_rate == to_rate` → returns `signal.to_vec()` (no-op).
-/// - `signal.is_empty()` → returns empty Vec.
 pub fn resample(signal: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate {
         return signal.to_vec();
@@ -204,9 +182,6 @@ pub fn resample(signal: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 }
 
 /// Mix a multi-channel interleaved `signal` down to mono by averaging each frame.
-///
-/// - `channels == 0` or `channels == 1` → returns `signal.to_vec()`.
-/// - Trailing samples that don't form a complete frame are silently dropped.
 pub fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     if channels <= 1 {
         return samples.to_vec();
@@ -226,8 +201,6 @@ pub fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
 }
 
 /// Interleave `left` and `right` channels into a single stereo buffer `[L0, R0, L1, R1, ...]`.
-///
-/// Output length is `2 * min(left.len(), right.len())`.
 pub fn interleave_stereo(left: &[f32], right: &[f32]) -> Vec<f32> {
     let n = left.len().min(right.len());
     let mut output = Vec::with_capacity(2 * n);
@@ -239,10 +212,6 @@ pub fn interleave_stereo(left: &[f32], right: &[f32]) -> Vec<f32> {
 }
 
 /// Normalise `signal` so the peak absolute value is 1.0.
-///
-/// Returns `(normalised_signal, scale)` where `scale` is the peak magnitude
-/// used for division.  If the peak is below 1e-8 the original signal is
-/// returned unchanged with `scale = 1.0` (avoids division by zero).
 pub fn normalize(signal: &[f32]) -> (Vec<f32>, f32) {
     let max_abs = signal.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
     if max_abs < 1e-8 {
@@ -259,21 +228,58 @@ pub fn denormalize(signal: &[f32], scale: f32) -> Vec<f32> {
 
 // ── Separator ─────────────────────────────────────────────────────────────────
 
-/// Wraps an ONNX Runtime session and the associated MDX-Net model parameters.
-#[derive(Debug)]
+/// Wraps an ONNX Runtime session, the MDX-Net params, and reusable DSP buffers.
 pub struct Separator {
     session: ort::session::Session,
     params: ModelParams,
     chunk_size: usize,
+
+    // Model-derived dims.
+    fft_size: usize,
+    hop_length: usize,
+    n_time_model: usize,
+    n_bins_model: usize,
+    n_bins_full: usize,
+
+    // FFT plans + scratch — built once, reused per chunk/per frame.
+    forward_fft: Arc<dyn Fft<f32>>,
+    inverse_fft: Arc<dyn Fft<f32>>,
+    fft_scratch: Vec<Complex<f32>>,
+    fft_buf: Vec<Complex<f32>>,
+
+    // Precomputed window + its OLA energy (norm = sum_t window[i - t*hop]^2).
+    window: Vec<f32>,
+    istft_norm: Vec<f32>,
+
+    // Reusable per-chunk buffers.
+    padded_chunk: Vec<f32>,            // pad + chunk_size + pad, FFT-pad zeros stay 0
+    tensor_input: Vec<f32>,            // 4 * n_bins_model * n_time_model
+    out_real: Vec<f32>,                // n_bins_model * n_time_model
+    out_imag: Vec<f32>,                // n_bins_model * n_time_model
+    istft_accum: Vec<f32>,             // (n_time_model-1)*hop + fft_size
+    chunk_time: Vec<f32>,              // chunk_size
+}
+
+impl std::fmt::Debug for Separator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Separator")
+            .field("params", &self.params)
+            .field("chunk_size", &self.chunk_size)
+            .field("fft_size", &self.fft_size)
+            .field("hop_length", &self.hop_length)
+            .field("n_time_model", &self.n_time_model)
+            .field("n_bins_model", &self.n_bins_model)
+            .finish()
+    }
 }
 
 impl Separator {
-    /// Create a new `Separator` by building an ORT session from `config`.
+    /// Create a new `Separator` by building an ORT session from `config` and
+    /// pre-allocating every reusable buffer the chunk loop needs.
     pub fn new(config: &Config, params: ModelParams) -> Result<Self, AppError> {
         tracing::debug!(
             model_path = %config.model_path.display(),
             execution_provider = ?config.execution_provider,
-            chunk_size = config.chunk_size,
             "building ONNX session"
         );
 
@@ -303,11 +309,185 @@ impl Separator {
             "ONNX session initialised"
         );
 
+        // ── Pre-compute model-derived DSP dims and reusable buffers ──────────
+        let fft_size = params.mdx_n_fft_scale_set;
+        let hop_length = HOP_LENGTH;
+        let n_time_model = 1usize << params.mdx_dim_t_set;
+        let n_bins_model = params.mdx_dim_f_set;
+        let n_bins_full = fft_size / 2 + 1;
+        // chunk_size is fully determined by the model: feeding any other value
+        // would either zero-pad the time dimension of the input tensor (quality
+        // hit) or truncate the chunk's audio (waste). Always derive it.
+        let chunk_size = hop_length * (n_time_model - 1);
+
+        let mut planner = FftPlanner::<f32>::new();
+        let forward_fft = planner.plan_fft_forward(fft_size);
+        let inverse_fft = planner.plan_fft_inverse(fft_size);
+        let scratch_len = forward_fft
+            .get_inplace_scratch_len()
+            .max(inverse_fft.get_inplace_scratch_len());
+        let fft_scratch = vec![Complex::<f32> { re: 0.0, im: 0.0 }; scratch_len];
+        let fft_buf = vec![Complex::<f32> { re: 0.0, im: 0.0 }; fft_size];
+
+        let window = hann_window(fft_size);
+
+        let pad = fft_size / 2;
+        let padded_chunk = vec![0.0_f32; pad + chunk_size + pad];
+
+        let plane = n_bins_model * n_time_model;
+        let tensor_input = vec![0.0_f32; 4 * plane];
+        let out_real = vec![0.0_f32; plane];
+        let out_imag = vec![0.0_f32; plane];
+
+        let accum_len = (n_time_model.saturating_sub(1)) * hop_length + fft_size;
+        let accum_len = accum_len.max(fft_size / 2 + chunk_size);
+        let istft_accum = vec![0.0_f32; accum_len];
+
+        // Precompute the OLA window-energy norm: norm[i] = Σ_t window[i - t*hop]^2.
+        let mut istft_norm = vec![0.0_f32; accum_len];
+        for t in 0..n_time_model {
+            let frame_start = t * hop_length;
+            for i in 0..fft_size {
+                if frame_start + i < istft_norm.len() {
+                    istft_norm[frame_start + i] += window[i] * window[i];
+                }
+            }
+        }
+
+        let chunk_time = vec![0.0_f32; chunk_size];
+
         Ok(Self {
             session,
             params,
-            chunk_size: config.chunk_size,
+            chunk_size,
+            fft_size,
+            hop_length,
+            n_time_model,
+            n_bins_model,
+            n_bins_full,
+            forward_fft,
+            inverse_fft,
+            fft_scratch,
+            fft_buf,
+            window,
+            istft_norm,
+            padded_chunk,
+            tensor_input,
+            out_real,
+            out_imag,
+            istft_accum,
+            chunk_time,
         })
+    }
+
+    /// Run a single inference pass with all-zero input. Lets the EP perform any
+    /// first-call kernel selection / cuDNN heuristic search before the timed loop.
+    fn warmup(&mut self) -> Result<(), AppError> {
+        for x in self.tensor_input.iter_mut() {
+            *x = 0.0;
+        }
+        let shape = [1usize, 4, self.n_bins_model, self.n_time_model];
+        let tensor_view: &[f32] = &self.tensor_input;
+        let tensor = ort::value::TensorRef::<f32>::from_array_view((shape, tensor_view))
+            .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+        let _outputs = self
+            .session
+            .run(ort::inputs![tensor])
+            .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Compute STFT of the current padded chunk and pack it directly into
+    /// `tensor_input` in the ONNX `[1, 4, n_bins_model, n_time_model]` layout.
+    /// Channels 0/1 = real/imag for input ch0; channels 2/3 = duplicate for ch1.
+    fn stft_into_tensor(&mut self) {
+        let plane = self.n_bins_model * self.n_time_model;
+        for x in self.tensor_input.iter_mut() {
+            *x = 0.0;
+        }
+
+        let mut pos = 0usize;
+        for t in 0..self.n_time_model {
+            if pos + self.fft_size > self.padded_chunk.len() {
+                break;
+            }
+            for i in 0..self.fft_size {
+                self.fft_buf[i] = Complex {
+                    re: self.padded_chunk[pos + i] * self.window[i],
+                    im: 0.0,
+                };
+            }
+            self.forward_fft
+                .process_with_scratch(&mut self.fft_buf, &mut self.fft_scratch);
+
+            for f in 0..self.n_bins_model {
+                let c = self.fft_buf[f];
+                let idx = f * self.n_time_model + t;
+                self.tensor_input[idx] = c.re;
+                self.tensor_input[plane + idx] = c.im;
+                self.tensor_input[2 * plane + idx] = c.re;
+                self.tensor_input[3 * plane + idx] = c.im;
+            }
+
+            pos += self.hop_length;
+        }
+    }
+
+    /// Inverse-STFT from `out_real` / `out_imag` into `chunk_time`.
+    fn istft_chunk(&mut self) {
+        for s in self.istft_accum.iter_mut() {
+            *s = 0.0;
+        }
+
+        let inv_n = 1.0_f32 / self.fft_size as f32;
+
+        for t in 0..self.n_time_model {
+            // Reconstruct full conjugate-symmetric spectrum:
+            //   bins 0..n_bins_full from model output; bins ≥ n_bins_model are zero;
+            //   bins n_bins_full..fft_size are conjugate mirrors.
+            for c in self.fft_buf.iter_mut() {
+                *c = Complex { re: 0.0, im: 0.0 };
+            }
+            for f in 0..self.n_bins_model {
+                let idx = f * self.n_time_model + t;
+                self.fft_buf[f] = Complex {
+                    re: self.out_real[idx],
+                    im: self.out_imag[idx],
+                };
+            }
+            for i in 1..self.n_bins_full - 1 {
+                let mirror = self.fft_size - i;
+                let c = self.fft_buf[i];
+                self.fft_buf[mirror] = Complex { re: c.re, im: -c.im };
+            }
+
+            self.inverse_fft
+                .process_with_scratch(&mut self.fft_buf, &mut self.fft_scratch);
+
+            let frame_start = t * self.hop_length;
+            for i in 0..self.fft_size {
+                let s = self.fft_buf[i].re * inv_n * self.window[i];
+                self.istft_accum[frame_start + i] += s;
+            }
+        }
+
+        // OLA normalise using the precomputed window-energy denominator.
+        for (a, &n) in self.istft_accum.iter_mut().zip(self.istft_norm.iter()) {
+            if n > 1e-8 {
+                *a /= n;
+            }
+        }
+
+        // Trim the centre-pad offset and copy into chunk_time.
+        let trim_start = self.fft_size / 2;
+        for i in 0..self.chunk_size {
+            let idx = trim_start + i;
+            self.chunk_time[i] = if idx < self.istft_accum.len() {
+                self.istft_accum[idx]
+            } else {
+                0.0
+            };
+        }
     }
 
     /// Separate vocals from `wav_path` and write the result to `output_path`.
@@ -368,143 +548,126 @@ impl Separator {
         // ── Step 3: Normalize ─────────────────────────────────────────────────
         let (normalized, scale) = normalize(&resampled);
 
-        // ── Step 4: DSP parameters ────────────────────────────────────────────
-        // MDX-Net specifics:
-        //   - hop is fixed at 1024 (independent of fft_size).
-        //   - dim_t in the model is `2 ** mdx_dim_t_set` (the JSON stores the
-        //     log2 exponent, e.g. 8 → 256 time frames).
-        //   - chunk_size in the config is expected to equal `1024 * (dim_t - 1)`.
-        let fft_size = self.params.mdx_n_fft_scale_set;
-        let hop_length = 1024usize;
-        let window = hann_window(fft_size);
-        let n_bins_full = fft_size / 2 + 1;
+        // ── Step 4: DSP / chunking parameters ────────────────────────────────
+        let chunk_size = self.chunk_size;
+        let outer_hop = chunk_size / 2;
+        let pad = self.fft_size / 2;
 
-        // ── Step 5: Split into overlapping chunks (50 % overlap) ─────────────
-        let hop = self.chunk_size / 2;
-        let mut chunks: Vec<Vec<f32>> = Vec::new();
-        let mut start = 0usize;
-        while start < normalized.len() {
-            let end = (start + self.chunk_size).min(normalized.len());
-            let mut chunk = normalized[start..end].to_vec();
-            if chunk.len() < self.chunk_size {
-                chunk.resize(self.chunk_size, 0.0); // zero-pad last chunk
-            }
-            chunks.push(chunk);
-            if start + self.chunk_size >= normalized.len() {
-                break;
-            }
-            start += hop;
-        }
-        let total_chunks = chunks.len();
+        // Number of chunks (matches the legacy chunking semantics: any tail
+        // shorter than chunk_size still produces one final chunk, zero-padded).
+        let total_chunks = if normalized.is_empty() {
+            0
+        } else if normalized.len() <= chunk_size {
+            1
+        } else {
+            // Number of full hops we can take before the chunk window fits
+            // entirely past the signal end.
+            let extra = normalized.len() - chunk_size;
+            extra.div_ceil(outer_hop) + 1
+        };
 
         tracing::info!(
             total_chunks,
             chunk_size = self.chunk_size,
-            fft_size,
-            hop_length,
+            fft_size = self.fft_size,
+            hop_length = self.hop_length,
             "chunked input; running inference"
         );
 
-        // ── Step 6: Chunk processing loop ─────────────────────────────────────
-        let mut output_chunks: Vec<Vec<f32>> = Vec::with_capacity(total_chunks);
+        // ── Step 5: Final-output buffers ─────────────────────────────────────
+        let output_len = normalized.len();
+        let mut full_output = vec![0.0_f32; output_len];
+        let mut weight = vec![0.0_f32; output_len];
 
-        for (idx, chunk) in chunks.iter().enumerate() {
-            tracing::debug!(
-                chunk_index = idx + 1,
-                of = total_chunks,
-                samples = chunk.len(),
-                "processing chunk"
-            );
-            let n_bins_model = self.params.mdx_dim_f_set;
-            // mdx_dim_t_set is stored as log2 — actual model time dim is 2^value.
-            let n_time_model = 1usize << self.params.mdx_dim_t_set;
+        // ── Step 6: Warmup pass (skip when no real chunks would run) ─────────
+        if total_chunks > 0 {
+            self.warmup()?;
+        }
 
-            // a) STFT
-            let frames = stft(chunk, fft_size, hop_length, &window);
+        // Throttle progress callback: at most ~100 updates over the whole run,
+        // plus one update on the final chunk.
+        let progress_every = (total_chunks / 100).max(1);
 
-            // b) Build input tensor [1, 4, n_bins_model, n_time_model]
-            let frames_to_use: Vec<&Vec<[f32; 2]>> =
-                frames.iter().take(n_time_model).collect();
+        // ── Step 7: Streaming chunk loop ─────────────────────────────────────
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        while start < normalized.len() {
+            let end = (start + chunk_size).min(normalized.len());
+            let usable = end - start;
 
-            let mut tensor_data = vec![0.0_f32; 4 * n_bins_model * n_time_model];
-            for t in 0..n_time_model {
-                for f in 0..n_bins_model {
-                    let (re, im) =
-                        if t < frames_to_use.len() && f < frames_to_use[t].len() {
-                            (frames_to_use[t][f][0], frames_to_use[t][f][1])
-                        } else {
-                            (0.0_f32, 0.0_f32)
-                        };
-                    // channels 0 (real) and 1 (imag) for input ch0
-                    tensor_data[0 * n_bins_model * n_time_model + f * n_time_model + t] = re;
-                    tensor_data[1 * n_bins_model * n_time_model + f * n_time_model + t] = im;
-                    // channels 2 (real) and 3 (imag) — copies for ch1
-                    tensor_data[2 * n_bins_model * n_time_model + f * n_time_model + t] = re;
-                    tensor_data[3 * n_bins_model * n_time_model + f * n_time_model + t] = im;
+            // Load chunk into reusable padded buffer; FFT-pad zeros stay zero.
+            self.padded_chunk[pad..pad + usable]
+                .copy_from_slice(&normalized[start..end]);
+            if usable < chunk_size {
+                for s in &mut self.padded_chunk[pad + usable..pad + chunk_size] {
+                    *s = 0.0;
                 }
             }
 
-            // c) Run ONNX forward pass — scoped so `outputs` is dropped before
-            //    the next iteration borrows `self.session` again.
-            let out_frames: Vec<Vec<[f32; 2]>> = {
-                let tensor = ort::value::Tensor::<f32>::from_array(
-                    ([1usize, 4, n_bins_model, n_time_model], tensor_data),
-                )
-                .map_err(|e| AppError::OnnxInference(e.to_string()))?;
+            // a) STFT directly into the tensor input layout.
+            self.stft_into_tensor();
+
+            // b) ONNX forward pass — borrow tensor_input as a TensorRef view.
+            //    We split-borrow `self`: tensor_input (immut) and session (mut)
+            //    are disjoint fields, which the borrow checker accepts.
+            {
+                let shape = [1usize, 4, self.n_bins_model, self.n_time_model];
+                let tensor_view: &[f32] = &self.tensor_input;
+                let tensor =
+                    ort::value::TensorRef::<f32>::from_array_view((shape, tensor_view))
+                        .map_err(|e| AppError::OnnxInference(e.to_string()))?;
 
                 let outputs = self
                     .session
                     .run(ort::inputs![tensor])
                     .map_err(|e| AppError::OnnxInference(e.to_string()))?;
 
-                // d) Extract output and rebuild complex frames
-                let (_out_shape, output_flat) = outputs[0]
+                let (_shape, output_flat) = outputs[0]
                     .try_extract_tensor::<f32>()
                     .map_err(|e| AppError::OnnxInference(e.to_string()))?;
 
-                // iSTFT needs the full one-sided spectrum (fft_size/2 + 1 bins).
-                // The model only outputs n_bins_model bins; the remaining
-                // high-frequency bins are left as zeros.
-                let mut frames_out: Vec<Vec<[f32; 2]>> =
-                    vec![vec![[0.0, 0.0]; n_bins_full]; n_time_model];
-                for t in 0..n_time_model {
-                    for f in 0..n_bins_model {
-                        let base = f * n_time_model + t;
-                        let re = output_flat.get(base).copied().unwrap_or(0.0);
-                        let imag_base = n_bins_model * n_time_model + base;
-                        let im = output_flat.get(imag_base).copied().unwrap_or(0.0);
-                        frames_out[t][f] = [re, im];
-                    }
+                // Copy out channel-0 real / imag into our flat buffers.
+                let plane = self.n_bins_model * self.n_time_model;
+                if output_flat.len() < 2 * plane {
+                    return Err(AppError::OnnxInference(format!(
+                        "model output too small: got {} floats, expected at least {}",
+                        output_flat.len(),
+                        2 * plane
+                    )));
                 }
-                frames_out
-                // `outputs` is dropped here, releasing the mutable borrow on
-                // `self.session`.
-            };
-
-            // e) iSTFT → time-domain chunk
-            let chunk_output = istft(&out_frames, fft_size, hop_length, &window, chunk.len());
-            output_chunks.push(chunk_output);
-            progress_cb(idx as f32 / total_chunks as f32);
-        }
-
-        // ── Step 7: Overlap-add reconstruction ───────────────────────────────
-        let output_len = normalized.len();
-        let mut full_output = vec![0.0_f32; output_len];
-        let mut weight = vec![0.0_f32; output_len];
-
-        let mut pos = 0usize;
-        for chunk_out in &output_chunks {
-            let copy_len = chunk_out.len().min(output_len.saturating_sub(pos));
-            for i in 0..copy_len {
-                full_output[pos + i] += chunk_out[i];
-                weight[pos + i] += 1.0;
+                self.out_real.copy_from_slice(&output_flat[..plane]);
+                self.out_imag.copy_from_slice(&output_flat[plane..2 * plane]);
             }
-            if pos + self.chunk_size >= output_len {
+
+            // c) iSTFT into the chunk_time buffer.
+            self.istft_chunk();
+
+            // d) Outer overlap-add directly into the final output.
+            let copy_len = self.chunk_time.len().min(output_len.saturating_sub(start));
+            for i in 0..copy_len {
+                full_output[start + i] += self.chunk_time[i];
+                weight[start + i] += 1.0;
+            }
+
+            tracing::trace!(
+                chunk_index = idx + 1,
+                of = total_chunks,
+                samples = usable,
+                "processed chunk"
+            );
+
+            if idx % progress_every == 0 {
+                progress_cb(idx as f32 / total_chunks.max(1) as f32);
+            }
+
+            if start + chunk_size >= normalized.len() {
                 break;
             }
-            pos += self.chunk_size / 2;
+            start += outer_hop;
+            idx += 1;
         }
 
+        // Outer OLA normalisation.
         for i in 0..output_len {
             if weight[i] > 0.0 {
                 full_output[i] /= weight[i];
@@ -680,7 +843,6 @@ mod tests {
             model_path: PathBuf::from("/nonexistent/model.onnx"),
             output_dir: PathBuf::from("./output"),
             execution_provider: ExecutionProvider::Cpu,
-            chunk_size: 261120,
         };
         let params = ModelParams {
             compensate: 1.0,

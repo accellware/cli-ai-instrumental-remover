@@ -127,8 +127,7 @@ Create `config.json` in the directory where you will run the binary:
 {
   "model_path": "models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
   "output_dir": "./output",
-  "execution_provider": "cpu",
-  "chunk_size": 261120
+  "execution_provider": "cpu"
 }
 ```
 
@@ -139,7 +138,8 @@ Create `config.json` in the directory where you will run the binary:
 | `model_path`         | string              | yes      | Relative or absolute path to the `.onnx` model file. The `model_data.json` must be in the **same directory**.                               |
 | `output_dir`         | string              | yes      | Directory where the processed video is written. Created automatically if it does not exist.                                                 |
 | `execution_provider` | `"cpu"` \| `"cuda"` | yes      | Inference device. Use `"cpu"` unless you have an NVIDIA GPU with CUDA installed.                                                            |
-| `chunk_size`         | integer             | yes      | Number of audio samples processed per inference chunk. `261120` works well for most files. Reduce (e.g. `131072`) if you run out of memory. |
+
+The per-inference chunk length is fixed by the model architecture (`1024 * ((1 << mdx_dim_t_set) - 1)`) and is not configurable.
 
 ---
 
@@ -265,8 +265,7 @@ cat > config.json <<'EOF'
 {
   "model_path": "models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
   "output_dir": "./output",
-  "execution_provider": "cpu",
-  "chunk_size": 261120
+  "execution_provider": "cpu"
 }
 EOF
 
@@ -379,7 +378,7 @@ music-separator -vv --input clip.mp4
 
 ```
  INFO music-separator starting verbose=2 log_level=None log_file=None
- INFO config loaded model_path="models/mdxnet/UVR-MDX-NET-Voc_FT.onnx" output_dir="./output" execution_provider=Cpu chunk_size=261120
+ INFO config loaded model_path="models/mdxnet/UVR-MDX-NET-Voc_FT.onnx" output_dir="./output" execution_provider=Cpu
  INFO pipeline starting input="clip.mp4" output_dir="./output" execution_provider=Cpu
  INFO [1/5] validating inputs
  INFO model parameters resolved name="UVR-MDX-NET-Voc_FT.onnx" primary_stem="Vocals" ...
@@ -390,7 +389,7 @@ music-separator -vv --input clip.mp4
  INFO ONNX session initialised execution_provider=Cpu model="..." model_bytes=Some(...)
  INFO audio loaded for inference total_samples=... sample_rate=48000 channels=2
  INFO chunked input; running inference total_chunks=N chunk_size=261120 fft_size=7680 hop_length=1024
-DEBUG processing chunk chunk_index=1 of=N samples=261120
+TRACE processed chunk chunk_index=1 of=N samples=261120
 ...
  INFO [5/5] remuxing video with isolated stem
  INFO pipeline finished output="output/clip_no_music.mp4"
@@ -435,7 +434,7 @@ code 1.
 | `ffmpeg audio extraction failed: …`                  | FFmpeg demux error                                 | Check FFmpeg installation; try running `ffprobe` on the file             |
 | `ffmpeg remux failed: …`                             | FFmpeg mux error                                   | Ensure the output directory is writable and has enough disk space        |
 | `failed to load ONNX model: …`                       | ONNX Runtime could not open the model              | Verify `model_path` points to a valid `.onnx` file                       |
-| `ONNX inference failed: …`                           | Runtime error during inference                     | Check available memory; try a smaller `chunk_size`                       |
+| `ONNX inference failed: …`                           | Runtime error during inference                     | Check available memory; try the CPU execution provider or a smaller model |
 
 ### CUDA errors
 

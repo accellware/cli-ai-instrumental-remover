@@ -120,12 +120,11 @@ The 6-step pipeline lives in `pipeline.rs::run()` and uses `indicatif::MultiProg
 {
   "model_path": "models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
   "output_dir": "./output",
-  "execution_provider": "cpu",
-  "chunk_size": 261120
+  "execution_provider": "cpu"
 }
 ```
 
-`execution_provider` is `"cpu"` or `"cuda"`. `model_data.json` **must be co-located** with the chosen `.onnx` file. Three models ship under `models/mdxnet/`: `UVR-MDX-NET-Voc_FT.onnx` (vocals), `UVR_MDXNET_KARA_2.onnx` (instrumental), `UVR-MDX-NET-Inst_HQ_3.onnx` (HQ instrumental). The pipeline always writes whatever the model's `primary_stem` is.
+`execution_provider` is `"cpu"` or `"cuda"`. `model_data.json` **must be co-located** with the chosen `.onnx` file. The chunk length fed to ONNX is fixed by the model — derived from `mdx_dim_t_set` as `1024 * ((1 << mdx_dim_t_set) - 1)` — not configurable. Three models ship under `models/mdxnet/`: `UVR-MDX-NET-Voc_FT.onnx` (vocals), `UVR_MDXNET_KARA_2.onnx` (instrumental), `UVR-MDX-NET-Inst_HQ_3.onnx` (HQ instrumental). The pipeline always writes whatever the model's `primary_stem` is.
 
 ## Key crates
 

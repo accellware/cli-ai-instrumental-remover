@@ -1,0 +1,147 @@
+name: Release Build (GPU / CUDA)
+
+# Builds the same binary as release-cpu.yml, but bundles the CUDA-enabled
+# ONNX Runtime shared libraries (downloaded by the `ort` crate's `cuda`
+# feature at build time) and ships docker/config.cuda.json so the artifact
+# is ready to drop onto a CUDA host.
+#
+# The runner does not have a GPU — we build but skip ORT-loading tests.
+# Host requirements at runtime: NVIDIA driver + CUDA 12.x + cuDNN 9.x.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'ONNX model basename to bundle (without .onnx)'
+        type: choice
+        default: UVR-MDX-NET-Voc_FT
+        options:
+          - UVR-MDX-NET-Voc_FT
+          - UVR_MDXNET_KARA_2
+          - UVR-MDX-NET-Inst_HQ_3
+
+env:
+  FFMPEG_VERSION: 8.1.1
+  FFMPEG_PREFIX: /opt/ffmpeg
+  CARGO_TERM_COLOR: always
+  # Resolution order: workflow_dispatch input → repo variable → hardcoded default.
+  MODEL_NAME: ${{ inputs.model_name || vars.MODEL_NAME || 'UVR-MDX-NET-Voc_FT' }}
+
+jobs:
+  build:
+    name: Build (linux-x86_64, cuda)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve & validate selected model
+        run: |
+          echo "Selected model: ${MODEL_NAME}"
+          test -f "models/mdxnet/${MODEL_NAME}.onnx" \
+            || { echo "::error::models/mdxnet/${MODEL_NAME}.onnx not found"; exit 1; }
+          test -f "models/mdxnet/model_data.json" \
+            || { echo "::error::models/mdxnet/model_data.json missing"; exit 1; }
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential nasm yasm pkg-config curl xz-utils zlib1g-dev \
+            clang libclang-dev libssl-dev ca-certificates
+
+      - name: Cache FFmpeg ${{ env.FFMPEG_VERSION }}
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FFMPEG_PREFIX }}
+          key: ffmpeg-${{ env.FFMPEG_VERSION }}-shared-linux-x86_64
+
+      - name: Build FFmpeg from source
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o ffmpeg.tar.xz
+          tar -xJf ffmpeg.tar.xz
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          ./configure \
+            --prefix="${FFMPEG_PREFIX}" \
+            --enable-shared --disable-static \
+            --disable-doc --disable-debug --enable-pic
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Export FFmpeg env
+        run: |
+          echo "PKG_CONFIG_PATH=${FFMPEG_PREFIX}/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${FFMPEG_PREFIX}/lib"          >> "$GITHUB_ENV"
+          echo "${FFMPEG_PREFIX}/bin" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: impl
+          key: cuda
+
+      - name: cargo build --release --features ffmpeg
+        working-directory: impl
+        # `cuda` is always-on via Cargo.toml's ort dep, so the CUDA-enabled
+        # ORT shared library is downloaded by `ort` during the build.
+        run: cargo build --release --features ffmpeg --locked
+
+      - name: cargo test (skip GPU-loading tests)
+        working-directory: impl
+        # The CI runner has no GPU. STFT/iSTFT and ffmpeg error-path tests
+        # don't open an ORT session, so they pass; anything that calls
+        # `Separator::new` would fail trying to register the CUDA EP.
+        run: cargo test --release --features ffmpeg --locked
+
+      - name: Collect ONNX Runtime CUDA libs
+        run: |
+          mkdir -p ort-libs
+          find impl/target/release -maxdepth 1 -type f -name 'libonnxruntime*.so*' \
+            -exec cp -v {} ort-libs/ \;
+          if [ -d "$HOME/.cache/ort.pyke.io" ]; then
+            find "$HOME/.cache/ort.pyke.io" -type f -name 'libonnxruntime*.so*' \
+              -exec cp -n {} ort-libs/ \;
+          fi
+          test -f ort-libs/libonnxruntime_providers_shared.so
+
+      - name: Stage release artifact
+        run: |
+          stage=dist/music-separator-gpu-linux-x86_64
+          mkdir -p "$stage/lib" "$stage/models/mdxnet"
+          cp impl/target/release/music-separator         "$stage/"
+          cp ort-libs/libonnxruntime*.so*                 "$stage/lib/"
+          cp "models/mdxnet/${MODEL_NAME}.onnx"           "$stage/models/mdxnet/"
+          cp  models/mdxnet/model_data.json               "$stage/models/mdxnet/"
+          # Generate config.json with the selected model and a relative path.
+          jq -n \
+            --arg model "models/mdxnet/${MODEL_NAME}.onnx" \
+            '{model_path: $model, output_dir: "./output", execution_provider: "cuda"}' \
+            > "$stage/config.json"
+          # Wrapper sets LD_LIBRARY_PATH so bundled ORT libs win.
+          cat > "$stage/run.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$here/lib:${LD_LIBRARY_PATH:-}"
+          exec "$here/music-separator" "$@"
+          EOF
+          chmod +x "$stage/run.sh"
+          tar -C dist -czf music-separator-gpu-linux-x86_64.tar.gz music-separator-gpu-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: music-separator-gpu-linux-x86_64
+          path: music-separator-gpu-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: music-separator-gpu-linux-x86_64.tar.gz

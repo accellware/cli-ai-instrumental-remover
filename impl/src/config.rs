@@ -15,7 +15,6 @@ pub struct Config {
     pub model_path: PathBuf,
     pub output_dir: PathBuf,
     pub execution_provider: ExecutionProvider,
-    pub chunk_size: usize,
 }
 
 pub fn load() -> Result<Config, AppError> {
@@ -38,17 +37,10 @@ pub fn load() -> Result<Config, AppError> {
     let cfg = serde_json::from_str::<Config>(&contents)
         .map_err(|e| AppError::ConfigParse(e.to_string()))?;
 
-    if cfg.chunk_size == 0 {
-        return Err(AppError::ConfigParse(
-            "chunk_size must be greater than 0".to_string(),
-        ));
-    }
-
     tracing::info!(
         model_path = %cfg.model_path.display(),
         output_dir = %cfg.output_dir.display(),
         execution_provider = ?cfg.execution_provider,
-        chunk_size = cfg.chunk_size,
         "config loaded"
     );
 
@@ -102,7 +94,7 @@ mod tests {
         let dir = tempdir().unwrap();
         write_config(
             dir.path(),
-            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "cpu", "chunk_size": 261120}"#,
+            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "cpu"}"#,
         );
         let _guard = CwdGuard::new(dir.path());
 
@@ -110,7 +102,6 @@ mod tests {
         assert_eq!(cfg.model_path, PathBuf::from("models/foo.onnx"));
         assert_eq!(cfg.output_dir, PathBuf::from("./out"));
         assert_eq!(cfg.execution_provider, ExecutionProvider::Cpu);
-        assert_eq!(cfg.chunk_size, 261120);
     }
 
     #[test]
@@ -131,30 +122,11 @@ mod tests {
     }
 
     #[test]
-    fn chunk_size_zero_returns_config_parse() {
-        let dir = tempdir().unwrap();
-        write_config(
-            dir.path(),
-            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "cpu", "chunk_size": 0}"#,
-        );
-        let _guard = CwdGuard::new(dir.path());
-
-        let err = load().unwrap_err();
-        match err {
-            AppError::ConfigParse(msg) => assert!(
-                msg.contains("chunk_size must be greater than 0"),
-                "got: {msg}"
-            ),
-            other => panic!("expected ConfigParse, got: {other:?}"),
-        }
-    }
-
-    #[test]
     fn unknown_execution_provider_returns_config_parse() {
         let dir = tempdir().unwrap();
         write_config(
             dir.path(),
-            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "tpu", "chunk_size": 261120}"#,
+            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "tpu"}"#,
         );
         let _guard = CwdGuard::new(dir.path());
 
@@ -166,7 +138,7 @@ mod tests {
         let dir = tempdir().unwrap();
         write_config(
             dir.path(),
-            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "cuda", "chunk_size": 261120}"#,
+            r#"{"model_path": "models/foo.onnx", "output_dir": "./out", "execution_provider": "cuda"}"#,
         );
         let _guard = CwdGuard::new(dir.path());
 
