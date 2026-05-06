@@ -1,0 +1,63 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug music-separator",
+            "cargo": {
+                "args": ["build", "--features", "ffmpeg", "--manifest-path", "${workspaceFolder}/impl/Cargo.toml"],
+                "filter": {
+                    "name": "music-separator",
+                    "kind": "bin"
+                },
+                "env": {
+                    "FFMPEG_DIR": "C:\\tools\\ffmpeg-8.1.1-full_build-shared",
+                    "LIBCLANG_PATH": "C:\\Program Files\\LLVM\\bin"
+                }
+            },
+            "args": ["--input", "${input:inputFile}", "-vv"],
+            "cwd": "${workspaceFolder}/impl"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Release music-separator",
+            "cargo": {
+                "args": ["build", "--release", "--features", "ffmpeg", "--manifest-path", "${workspaceFolder}/impl/Cargo.toml"],
+                "filter": {
+                    "name": "music-separator",
+                    "kind": "bin"
+                },
+                "env": {
+                    "FFMPEG_DIR": "C:\\tools\\ffmpeg-8.1.1-full_build-shared",
+                    "LIBCLANG_PATH": "C:\\Program Files\\LLVM\\bin"
+                }
+            },
+            "args": ["--input", "${input:inputFile}"],
+            "cwd": "${workspaceFolder}/impl"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests",
+            "cargo": {
+                "args": ["test", "--manifest-path", "${workspaceFolder}/impl/Cargo.toml", "--no-run"],
+                "filter": {
+                    "name": "music-separator",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/impl"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "inputFile",
+            "type": "promptString",
+            "description": "Path to input video file",
+            "default": "${workspaceFolder}/impl/test.mp4"
+        }
+    ]
+}

@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo build (debug)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["build", "--features", "ffmpeg"],
+            "options": {
+                "cwd": "${workspaceFolder}/impl"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "cargo test (debug)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["test", "--no-run"],
+            "options": {
+                "cwd": "${workspaceFolder}/impl"
+            },
+            "group": "test",
+            "problemMatcher": ["$rustc"]
+        }
+    ]
+}

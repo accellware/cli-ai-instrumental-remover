@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./target/release/music-separator.exe --input ../tests/raw_vid.mp4)",
+      "Bash(ls \"C:/Users/nblx2/.cargo/registry/src/\" 2>&1 | head)",
+      "Read(//c/Users/nblx2/.cargo/registry/src/**)",
+      "Bash(tasklist)",
+      "Bash(where nvidia-smi *)",
+      "Bash(nvidia-smi)",
+      "Bash(cargo clean *)",
+      "Bash(cargo run *)",
+      "Bash(/d/Workspace/Playground/AI/MusicSeparator/impl/target/debug/music-separator.exe -vv --input nonexistent.mp4)",
+      "Bash(./target/release/music-separator.exe -vv --input ../tests/raw_vid_10s.mp4)",
+      "Bash(./target/release/music-separator.exe -v --input ../tests/raw_vid_10s.mp4)"
+    ]
+  }
+}

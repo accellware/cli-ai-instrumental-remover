@@ -20,10 +20,11 @@ music-separator --input interview.mp4
 5. [Running](#running)
 6. [Available Models](#available-models)
 7. [Progress Output](#progress-output)
-8. [Output Naming](#output-naming)
-9. [Error Reference](#error-reference)
-10. [CUDA / GPU Acceleration](#cuda--gpu-acceleration)
-11. [Development](#development)
+8. [Logging](#logging)
+9. [Output Naming](#output-naming)
+10. [Error Reference](#error-reference)
+11. [CUDA / GPU Acceleration](#cuda--gpu-acceleration)
+12. [Development](#development)
 
 ---
 
@@ -40,12 +41,12 @@ music-separator --input interview.mp4
 ### Installing FFmpeg (Windows)
 
 Download the **shared** build from <https://www.gyan.dev/ffmpeg/builds/> (e.g.
-`ffmpeg-7.1-full_build-shared.7z`), extract it, then set the environment
+`ffmpeg-8.1-full_build-shared.7z`), extract it, then set the environment
 variables so the compiler and linker can find the headers and `.lib` files:
 
 ```powershell
 # In your shell profile or .cargo/config.toml [env] block:
-FFMPEG_DIR   = "C:\ffmpeg-7.1"          # root of the extracted archive
+FFMPEG_DIR   = "C:\ffmpeg-8.1"          # root of the extracted archive
 LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 ```
 
@@ -236,6 +237,67 @@ If the input file has **no audio track**, the file is copied verbatim to
 No audio track found; copying file to output.
 Done → output/silent_video_no_music.mp4
 ```
+
+---
+
+## Logging
+
+The CLI uses the [`tracing`] ecosystem. By default it is **silent** at
+`WARN` level so stdout/stderr stay clean for scripting; bump verbosity
+when you need to see what the pipeline is doing.
+
+### Flags
+
+| Flag                  | Meaning                                                                          |
+| --------------------- | -------------------------------------------------------------------------------- |
+| (no flag)             | `WARN` (default)                                                                 |
+| `-v`                  | `INFO` — one line per pipeline step, resolved config, model parameters           |
+| `-vv`                 | `DEBUG` — file paths, audio stream layout, per-chunk inference progress          |
+| `-vvv`                | `TRACE` — everything                                                             |
+| `--log-level <LEVEL>` | Explicit override: `off`, `error`, `warn`, `info`, `debug`, or `trace`           |
+| `--log-file <PATH>`   | Also tee logs to this file (overwritten each run)                                |
+
+**Precedence:** `--log-level` > `-v` count > `RUST_LOG` env var > default `WARN`.
+
+All log output goes to **stderr** — stdout stays clean. Logs play nicely
+with the indicatif progress bars: bars are momentarily paused while a log
+line is written so they never overwrite each other.
+
+### `RUST_LOG`
+
+Power users can use the standard env-filter syntax to dial different
+crates independently:
+
+```bash
+RUST_LOG=music_separator=debug,ort=info music-separator --input clip.mp4
+```
+
+### Worked example
+
+```bash
+music-separator -vv --input clip.mp4
+```
+
+```
+ INFO music-separator starting verbose=2 log_level=None log_file=None
+ INFO config loaded model_path="models/mdxnet/UVR-MDX-NET-Voc_FT.onnx" output_dir="./output" execution_provider=Cpu chunk_size=261120
+ INFO pipeline starting input="clip.mp4" output_dir="./output" execution_provider=Cpu
+ INFO [1/5] validating inputs
+ INFO model parameters resolved name="UVR-MDX-NET-Voc_FT.onnx" primary_stem="Vocals" ...
+ INFO [2/5] probing audio stream
+ INFO audio stream detected sample_rate=48000 channels=2
+ INFO [3/5] extracting audio to temp WAV
+ INFO [4/5] running ONNX inference
+ INFO ONNX session initialised execution_provider=Cpu model="..." model_bytes=Some(...)
+ INFO audio loaded for inference total_samples=... sample_rate=48000 channels=2
+ INFO chunked input; running inference total_chunks=N chunk_size=261120 fft_size=7680 hop_length=1024
+DEBUG processing chunk chunk_index=1 of=N samples=261120
+...
+ INFO [5/5] remuxing video with isolated stem
+ INFO pipeline finished output="output/clip_no_music.mp4"
+```
+
+[`tracing`]: https://docs.rs/tracing
 
 ---
 

@@ -51,7 +51,7 @@ Track progress by checking off each item as it is completed.
 ### Notes
 
 - `ort` pinned to `2.0.0-rc.12` — no stable 2.x release on crates.io.
-- Build environment: installed FFmpeg 7.1 shared dev libs to `~/ffmpeg-7.1` and LLVM (for libclang) to `C:\Program Files\LLVM`. Paths are wired via gitignored `impl/.cargo/config.toml`'s `[env]` block.
+- Build environment: installed FFmpeg 8.1 shared dev libs to `~/ffmpeg-8.1` and LLVM (for libclang) to `C:\Program Files\LLVM`. Paths are wired via gitignored `impl/.cargo/config.toml`'s `[env]` block.
 - **`ffmpeg-next` made `optional = true` and gated behind a `ffmpeg` feature** in `Cargo.toml`. Reason: `ffmpeg-sys-next 7.1.3` has hardcoded `size_of` assertions that don't match FFmpeg 7.1's opaque-struct API on Windows (10 layout errors against multiple `AVFilter*` types and `tm`). Re-enabling will be addressed in Prompt 4 — likely by bumping to `ffmpeg-next 8.x` or pinning to a known-good `ffmpeg-sys-next` version.
 
 ---

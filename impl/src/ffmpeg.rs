@@ -15,76 +15,162 @@ mod imp {
     pub fn probe_audio(video_path: &Path) -> Result<Option<AudioInfo>, AppError> {
         ffmpeg::init().map_err(|e| AppError::FfmpegProbe(e.to_string()))?;
 
+        tracing::debug!(path = %video_path.display(), "probing input streams");
+
         let ictx = ffmpeg::format::input(video_path)
-            .map_err(|e| AppError::FfmpegProbe(e.to_string()))?;
+            .map_err(|e| {
+                tracing::warn!(path = %video_path.display(), error = %e, "ffmpeg probe open failed");
+                AppError::FfmpegProbe(e.to_string())
+            })?;
+
+        let stream_count = ictx.streams().count();
+        tracing::debug!(stream_count, "input opened");
 
         for stream in ictx.streams() {
-            if stream.parameters().medium() == ffmpeg::media::Type::Audio {
+            let medium = stream.parameters().medium();
+            tracing::debug!(index = stream.index(), medium = ?medium, "stream");
+            if medium == ffmpeg::media::Type::Audio {
                 let params = stream.parameters();
                 let sample_rate = unsafe { (*params.as_ptr()).sample_rate as u32 };
                 let channels = unsafe { (*params.as_ptr()).ch_layout.nb_channels as u16 };
+                tracing::debug!(
+                    sample_rate, channels,
+                    "audio stream selected"
+                );
                 return Ok(Some(AudioInfo { sample_rate, channels }));
             }
         }
 
+        tracing::debug!("no audio stream found in input");
         Ok(None)
     }
 
     pub fn extract_audio(video_path: &Path, output_wav: &Path) -> Result<AudioInfo, AppError> {
         ffmpeg::init().map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
 
+        tracing::debug!(
+            input = %video_path.display(),
+            output = %output_wav.display(),
+            "extract_audio start"
+        );
+
         let mut ictx = ffmpeg::format::input(video_path)
-            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, "ffmpeg input open failed");
+                AppError::FfmpegExtract(e.to_string())
+            })?;
 
-        let mut octx = ffmpeg::format::output(output_wav)
-            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
-
-        // Use a block so in_stream (borrows ictx) and out_stream (borrows octx)
-        // are both dropped before ictx.packets() needs &mut ictx.
-        let (audio_stream_index, sample_rate, channels, in_time_base) = {
+        let (audio_stream_index, sample_rate, channels, decoder_params) = {
             let in_stream = ictx
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
                 .ok_or_else(|| AppError::FfmpegExtract("no audio stream".to_string()))?;
-
-            let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::PCM_S16LE)
-                .ok_or_else(|| AppError::FfmpegExtract("PCM_S16LE encoder not found".to_string()))?;
-            let mut out_stream = octx
-                .add_stream(codec)
-                .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
-            out_stream.set_parameters(in_stream.parameters());
-
-            (
-                in_stream.index(),
-                unsafe { (*in_stream.parameters().as_ptr()).sample_rate as u32 },
-                unsafe { (*in_stream.parameters().as_ptr()).ch_layout.nb_channels as u16 },
-                in_stream.time_base(),
-            )
-            // in_stream and out_stream are both dropped here
+            let params = in_stream.parameters();
+            let sr = unsafe { (*params.as_ptr()).sample_rate as u32 };
+            let ch = unsafe { (*params.as_ptr()).ch_layout.nb_channels as u16 };
+            (in_stream.index(), sr, ch, params)
         };
 
-        octx.write_header()
+        let codec_ctx = ffmpeg::codec::context::Context::from_parameters(decoder_params)
+            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+        let mut decoder = codec_ctx
+            .decoder()
+            .audio()
             .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
 
-        // Get out_time_base after write_header so the muxer has finalised it.
-        // ffmpeg::Rational is Copy so the borrow ends immediately.
-        let out_time_base = octx
-            .stream(0)
-            .ok_or_else(|| AppError::FfmpegExtract("output stream 0 missing after write_header".to_string()))?
-            .time_base();
+        tracing::debug!(
+            stream_index = audio_stream_index,
+            sample_rate,
+            channels,
+            decoder_format = ?decoder.format(),
+            "audio decoder ready"
+        );
 
-        for (stream, mut packet) in ictx.packets() {
+        // Resample the decoder's native format (often FLTP) → packed S16 at the
+        // same sample rate and channel layout, so we can write a standard WAV.
+        let dst_format =
+            ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
+        let dst_layout = decoder.channel_layout();
+        let mut resampler = decoder
+            .resampler(dst_format, dst_layout, sample_rate)
+            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+
+        let wav_spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(output_wav, wav_spec)
+            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+
+        let mut decoded = ffmpeg::frame::Audio::empty();
+        let mut resampled = ffmpeg::frame::Audio::empty();
+
+        let write_resampled =
+            |frame: &ffmpeg::frame::Audio,
+             writer: &mut hound::WavWriter<std::io::BufWriter<std::fs::File>>|
+             -> Result<(), AppError> {
+                let n = frame.samples() * channels as usize;
+                if n == 0 {
+                    return Ok(());
+                }
+                let bytes = frame.data(0);
+                let needed = n * 2;
+                if bytes.len() < needed {
+                    return Err(AppError::FfmpegExtract(format!(
+                        "resampler returned {} bytes, expected at least {}",
+                        bytes.len(),
+                        needed
+                    )));
+                }
+                for chunk in bytes[..needed].chunks_exact(2) {
+                    let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                    writer
+                        .write_sample(s)
+                        .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+                }
+                Ok(())
+            };
+
+        for (stream, packet) in ictx.packets() {
             if stream.index() != audio_stream_index {
                 continue;
             }
-            packet.rescale_ts(in_time_base, out_time_base);
-            packet.set_stream(0);
-            packet
-                .write_interleaved(&mut octx)
+            decoder
+                .send_packet(&packet)
                 .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                resampler
+                    .run(&decoded, &mut resampled)
+                    .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+                write_resampled(&resampled, &mut writer)?;
+            }
         }
 
-        octx.write_trailer()
+        decoder
+            .send_eof()
+            .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            resampler
+                .run(&decoded, &mut resampled)
+                .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
+            write_resampled(&resampled, &mut writer)?;
+        }
+
+        // Drain any samples buffered inside the resampler.
+        while resampler.delay().is_some() {
+            match resampler.flush(&mut resampled) {
+                Ok(_) => write_resampled(&resampled, &mut writer)?,
+                Err(e) => return Err(AppError::FfmpegExtract(e.to_string())),
+            }
+            if resampled.samples() == 0 {
+                break;
+            }
+        }
+
+        writer
+            .finalize()
             .map_err(|e| AppError::FfmpegExtract(e.to_string()))?;
 
         Ok(AudioInfo { sample_rate, channels })
@@ -96,91 +182,84 @@ mod imp {
         output_path: &Path,
     ) -> Result<(), AppError> {
         ffmpeg::init().map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-
-        let mut video_ictx = ffmpeg::format::input(video_path)
-            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-        let mut audio_ictx = ffmpeg::format::input(vocals_wav)
-            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-        let mut octx = ffmpeg::format::output(output_path)
-            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-
-        // video_stream_map: (video_in_stream_index, video_in_time_base, output_stream_index)
-        // audio info: (audio_in_stream_index, audio_in_time_base, audio_output_stream_index)
-        let (video_stream_map, audio_in_idx, audio_in_tb, audio_out_idx) = {
-            let mut vmap: Vec<(usize, ffmpeg::Rational, usize)> = Vec::new();
-            let mut out_idx = 0usize;
-
-            for in_stream in video_ictx.streams() {
-                if in_stream.parameters().medium() == ffmpeg::media::Type::Video {
-                    let mut out_stream = octx
-                        .add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))
-                        .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-                    out_stream.set_parameters(in_stream.parameters());
-                    vmap.push((in_stream.index(), in_stream.time_base(), out_idx));
-                    out_idx += 1;
-                }
-            }
-
-            let audio_in_stream = audio_ictx
-                .streams()
-                .best(ffmpeg::media::Type::Audio)
-                .ok_or_else(|| AppError::FfmpegRemux("vocals WAV has no audio stream".to_string()))?;
-            let a_in_idx = audio_in_stream.index();
-            let a_in_tb = audio_in_stream.time_base();
-
-            {
-                let mut out_audio = octx
-                    .add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))
-                    .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-                out_audio.set_parameters(audio_in_stream.parameters());
-            }
-
-            (vmap, a_in_idx, a_in_tb, out_idx)
-            // all borrows on video_ictx, audio_ictx, octx dropped here
-        };
-
-        octx.write_header()
-            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-
-        // Write all video packets from original
-        for (stream, mut packet) in video_ictx.packets() {
-            if let Some(&(_, in_tb, out_idx)) = video_stream_map
-                .iter()
-                .find(|(in_idx, _, _)| *in_idx == stream.index())
-            {
-                let out_tb = octx
-                    .stream(out_idx)
-                    .ok_or_else(|| AppError::FfmpegRemux("output video stream missing".to_string()))?
-                    .time_base();
-                packet.rescale_ts(in_tb, out_tb);
-                packet.set_stream(out_idx);
-                packet
-                    .write_interleaved(&mut octx)
-                    .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-            }
-        }
-
-        // Write all audio packets from vocals WAV
-        for (stream, mut packet) in audio_ictx.packets() {
-            if stream.index() != audio_in_idx {
-                continue;
-            }
-            let out_tb = octx
-                .stream(audio_out_idx)
-                .ok_or_else(|| AppError::FfmpegRemux("output audio stream missing".to_string()))?
-                .time_base();
-            packet.rescale_ts(audio_in_tb, out_tb);
-            packet.set_stream(audio_out_idx);
-            packet
-                .write_interleaved(&mut octx)
-                .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-        }
-
-        octx.write_trailer()
-            .map_err(|e| AppError::FfmpegRemux(e.to_string()))?;
-
-        Ok(())
+        super::remux_via_ffmpeg_cli(video_path, vocals_wav, output_path)
     }
+}
+
+// Remux by spawning the `ffmpeg` CLI. We delegate this step instead of using
+// the ffmpeg-next encoder/muxer API because:
+//   - The vocals WAV is float PCM, which most container muxers (notably MP4)
+//     don't accept — the audio must be re-encoded (e.g. to AAC) on the way out.
+//     Doing that via the library requires an encoder + AVAudioFifo for
+//     frame-size alignment + per-format sample-format negotiation, none of
+//     which is exposed cleanly by ffmpeg-next 8.
+//   - The CLI is already a runtime dependency: the shared libs we link
+//     against come from the same FFmpeg install whose `bin/` is on PATH.
+// The video stream is still copied (-c:v copy), preserving the project's
+// "never re-encode video" guarantee.
+fn remux_via_ffmpeg_cli(
+    video_path: &Path,
+    vocals_wav: &Path,
+    output_path: &Path,
+) -> Result<(), AppError> {
+    use std::process::{Command, Stdio};
+
+    tracing::debug!(
+        video = %video_path.display(),
+        audio = %vocals_wav.display(),
+        output = %output_path.display(),
+        "remux_with_audio start (ffmpeg CLI)"
+    );
+
+    let args = [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        &video_path.to_string_lossy(),
+        "-i",
+        &vocals_wav.to_string_lossy(),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        &output_path.to_string_lossy(),
+    ];
+    tracing::debug!(?args, "spawning ffmpeg");
+
+    let output = Command::new("ffmpeg")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| {
+            AppError::FfmpegRemux(format!(
+                "could not spawn ffmpeg (is it on PATH?): {e}"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "<signal>".to_string());
+        tracing::warn!(exit_code = %code, stderr = %stderr, "ffmpeg remux failed");
+        return Err(AppError::FfmpegRemux(format!(
+            "ffmpeg exited with code {code}: {stderr}"
+        )));
+    }
+
+    tracing::debug!("ffmpeg remux finished");
+    Ok(())
 }
 
 pub fn probe_audio(video_path: &Path) -> Result<Option<AudioInfo>, AppError> {

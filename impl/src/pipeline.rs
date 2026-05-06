@@ -4,7 +4,7 @@ use uuid::Uuid;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use crate::config::Config;
 use crate::error::AppError;
-use crate::{model_data, ffmpeg};
+use crate::{logging, model_data, ffmpeg};
 use crate::inference::Separator;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -21,13 +21,13 @@ fn make_spinner(mp: &MultiProgress, msg: &'static str) -> ProgressBar {
     pb
 }
 
-/// Attempt to delete a temp file, printing a warning on failure.
+/// Attempt to delete a temp file, warning (via tracing) on failure.
 fn try_remove(path: &Path) {
     if let Err(e) = fs::remove_file(path) {
-        eprintln!(
-            "Warning: could not delete temp file {}: {}",
-            path.display(),
-            e
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "could not delete temp file"
         );
     }
 }
@@ -42,8 +42,19 @@ fn cleanup_temps(extracted: &Path, vocals: &Path) {
 
 pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     let mp = MultiProgress::new();
+    // Hand the same MultiProgress to the tracing writer so log emissions
+    // pause the bars instead of fighting them on screen.
+    logging::set_progress(mp.clone());
+
+    tracing::info!(
+        input = %input_path.display(),
+        output_dir = %config.output_dir.display(),
+        execution_provider = ?config.execution_provider,
+        "pipeline starting"
+    );
 
     // ── Step 1: Validate ───────────────────────────────────────────────────────
+    tracing::info!("[1/5] validating inputs");
     let pb1 = make_spinner(&mp, "[1/5] Validating inputs...");
 
     if !config.model_path.exists() {
@@ -81,6 +92,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     pb1.finish_with_message("[1/5] Validating inputs... ✓");
 
     // ── Step 2: Probe audio ────────────────────────────────────────────────────
+    tracing::info!("[2/5] probing audio stream");
     let pb2 = make_spinner(&mp, "[2/5] Probing audio...");
 
     let audio_info = ffmpeg::probe_audio(input_path)?;
@@ -96,19 +108,38 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
         let output_path = config.output_dir.join(&out_name);
         fs::copy(input_path, &output_path)
             .map_err(|e| AppError::FileCopy(e.to_string()))?;
+        tracing::info!(
+            output = %output_path.display(),
+            "no audio track found; copied input verbatim"
+        );
         eprintln!("No audio track found; copying file to output.");
         pb2.finish_with_message("[2/5] Probing audio... ✓");
         return Ok(());
     }
 
+    if let Some(info) = audio_info {
+        tracing::info!(
+            sample_rate = info.sample_rate,
+            channels = info.channels,
+            "audio stream detected"
+        );
+    }
+
     pb2.finish_with_message("[2/5] Probing audio... ✓");
 
     // ── Step 3: Extract audio ──────────────────────────────────────────────────
+    tracing::info!("[3/5] extracting audio to temp WAV");
     let pb3 = make_spinner(&mp, "[3/5] Extracting audio...");
 
     let temp_dir = std::env::temp_dir();
     let extracted_wav = temp_dir.join(format!("{}_extracted.wav", Uuid::new_v4()));
     let vocals_wav = temp_dir.join(format!("{}_vocals.wav", Uuid::new_v4()));
+
+    tracing::debug!(
+        extracted_wav = %extracted_wav.display(),
+        vocals_wav = %vocals_wav.display(),
+        "allocated temp file paths"
+    );
 
     if let Err(e) = ffmpeg::extract_audio(input_path, &extracted_wav) {
         cleanup_temps(&extracted_wav, &vocals_wav);
@@ -118,6 +149,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     pb3.finish_with_message("[3/5] Extracting audio... ✓");
 
     // ── Step 4: Run inference ──────────────────────────────────────────────────
+    tracing::info!("[4/5] running ONNX inference");
     let pb4 = mp.add(ProgressBar::new(100));
     pb4.set_style(
         ProgressStyle::default_bar()
@@ -145,6 +177,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     pb4.finish_with_message("[4/5] Running inference...");
 
     // ── Step 5: Remux ──────────────────────────────────────────────────────────
+    tracing::info!("[5/5] remuxing video with isolated stem");
     let pb5 = make_spinner(&mp, "[5/5] Remuxing video...");
 
     let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -164,9 +197,11 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
     pb5.finish_with_message("[5/5] Remuxing video... ✓");
 
     // ── Step 6: Cleanup ────────────────────────────────────────────────────────
+    tracing::debug!("cleaning up temp files");
     try_remove(&extracted_wav);
     try_remove(&vocals_wav);
 
+    tracing::info!(output = %output_path.display(), "pipeline finished");
     eprintln!("Done → {}", output_path.display());
 
     Ok(())

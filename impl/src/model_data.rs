@@ -15,6 +15,8 @@ pub struct ModelParams {
 }
 
 pub fn load(model_data_path: &Path) -> Result<Vec<ModelParams>, AppError> {
+    tracing::debug!(path = %model_data_path.display(), "loading model_data.json");
+
     if !model_data_path.exists() {
         return Err(AppError::ModelDataNotFound(model_data_path.to_path_buf()));
     }
@@ -22,17 +24,35 @@ pub fn load(model_data_path: &Path) -> Result<Vec<ModelParams>, AppError> {
         .map_err(|e| AppError::ModelDataParse(format!("read error: {e}")))?;
     let map: HashMap<String, ModelParams> = serde_json::from_str(&contents)
         .map_err(|e| AppError::ModelDataParse(e.to_string()))?;
-    Ok(map.into_values().collect())
+
+    let params: Vec<ModelParams> = map.into_values().collect();
+    tracing::debug!(
+        count = params.len(),
+        names = ?params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        "model_data.json loaded"
+    );
+    Ok(params)
 }
 
 pub fn find_by_name<'a>(
     params: &'a [ModelParams],
     model_filename: &str,
 ) -> Result<&'a ModelParams, AppError> {
-    params
+    let found = params
         .iter()
         .find(|p| p.name == model_filename)
-        .ok_or_else(|| AppError::ModelNotInRegistry(model_filename.to_string()))
+        .ok_or_else(|| AppError::ModelNotInRegistry(model_filename.to_string()))?;
+
+    tracing::info!(
+        name = %found.name,
+        primary_stem = %found.primary_stem,
+        compensate = found.compensate,
+        mdx_dim_f_set = found.mdx_dim_f_set,
+        mdx_dim_t_set = found.mdx_dim_t_set,
+        mdx_n_fft_scale_set = found.mdx_n_fft_scale_set,
+        "model parameters resolved"
+    );
+    Ok(found)
 }
 
 #[cfg(test)]

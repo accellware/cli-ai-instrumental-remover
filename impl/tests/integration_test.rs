@@ -54,3 +54,67 @@ fn cli_shows_help() {
         "expected '--input' in help output, got: {stdout}"
     );
 }
+
+#[test]
+fn cli_help_lists_logging_flags() {
+    let mut cmd = Command::cargo_bin("music-separator").unwrap();
+    cmd.arg("--help");
+    let output = cmd.output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--verbose") || stdout.contains("-v"),
+        "expected verbose flag in help output, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("--log-level"),
+        "expected --log-level in help output, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("--log-file"),
+        "expected --log-file in help output, got: {stdout}"
+    );
+}
+
+#[test]
+fn cli_accepts_verbose_flag() {
+    // -v should be parsed without error; the run will then exit 1 because
+    // there is no config.json in the temp dir, which is fine — we only
+    // care that clap accepts the flag.
+    let dir = tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("music-separator").unwrap();
+    cmd.current_dir(dir.path())
+        .args(["-v", "--input", "/nonexistent/video.mp4"]);
+    let output = cmd.output().unwrap();
+    // Exit 1 (config missing) — but NOT 2 (which clap uses for parse errors).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit 1, got: {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn cli_accepts_repeated_verbose_flags() {
+    let dir = tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("music-separator").unwrap();
+    cmd.current_dir(dir.path())
+        .args(["-vvv", "--input", "/nonexistent/video.mp4"]);
+    let output = cmd.output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn cli_accepts_log_level_flag() {
+    let dir = tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("music-separator").unwrap();
+    cmd.current_dir(dir.path())
+        .args([
+            "--log-level", "debug",
+            "--input", "/nonexistent/video.mp4",
+        ]);
+    let output = cmd.output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+}

@@ -270,12 +270,21 @@ pub struct Separator {
 impl Separator {
     /// Create a new `Separator` by building an ORT session from `config`.
     pub fn new(config: &Config, params: ModelParams) -> Result<Self, AppError> {
+        tracing::debug!(
+            model_path = %config.model_path.display(),
+            execution_provider = ?config.execution_provider,
+            chunk_size = config.chunk_size,
+            "building ONNX session"
+        );
+
         let builder = ort::session::Session::builder()
             .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
 
         let mut builder = match config.execution_provider {
             ExecutionProvider::Cuda => builder
-                .with_execution_providers([ort::ep::CUDA::default().build()])
+                .with_execution_providers([
+                    ort::ep::CUDA::default().build().error_on_failure(),
+                ])
                 .map_err(|e| AppError::OnnxLoad(e.to_string()))?,
             ExecutionProvider::Cpu => builder,
         };
@@ -283,6 +292,16 @@ impl Separator {
         let session = builder
             .commit_from_file(&config.model_path)
             .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+
+        let model_size = std::fs::metadata(&config.model_path)
+            .map(|m| m.len())
+            .ok();
+        tracing::info!(
+            execution_provider = ?config.execution_provider,
+            model = %config.model_path.display(),
+            model_bytes = ?model_size,
+            "ONNX session initialised"
+        );
 
         Ok(Self {
             session,
@@ -325,10 +344,22 @@ impl Separator {
             }
         };
 
+        tracing::info!(
+            total_samples = samples.len(),
+            sample_rate = orig_sample_rate,
+            channels = orig_channels,
+            "audio loaded for inference"
+        );
+
         // ── Step 2: Mono + resample to 44100 ─────────────────────────────────
         let mono = to_mono(&samples, orig_channels);
         let needs_resample = orig_sample_rate != 44100;
         let resampled = if needs_resample {
+            tracing::debug!(
+                from = orig_sample_rate,
+                to = 44100u32,
+                "resampling to model rate"
+            );
             resample(&mono, orig_sample_rate, 44100)
         } else {
             mono
@@ -338,9 +369,15 @@ impl Separator {
         let (normalized, scale) = normalize(&resampled);
 
         // ── Step 4: DSP parameters ────────────────────────────────────────────
+        // MDX-Net specifics:
+        //   - hop is fixed at 1024 (independent of fft_size).
+        //   - dim_t in the model is `2 ** mdx_dim_t_set` (the JSON stores the
+        //     log2 exponent, e.g. 8 → 256 time frames).
+        //   - chunk_size in the config is expected to equal `1024 * (dim_t - 1)`.
         let fft_size = self.params.mdx_n_fft_scale_set;
-        let hop_length = fft_size / 4;
+        let hop_length = 1024usize;
         let window = hann_window(fft_size);
+        let n_bins_full = fft_size / 2 + 1;
 
         // ── Step 5: Split into overlapping chunks (50 % overlap) ─────────────
         let hop = self.chunk_size / 2;
@@ -360,12 +397,27 @@ impl Separator {
         }
         let total_chunks = chunks.len();
 
+        tracing::info!(
+            total_chunks,
+            chunk_size = self.chunk_size,
+            fft_size,
+            hop_length,
+            "chunked input; running inference"
+        );
+
         // ── Step 6: Chunk processing loop ─────────────────────────────────────
         let mut output_chunks: Vec<Vec<f32>> = Vec::with_capacity(total_chunks);
 
         for (idx, chunk) in chunks.iter().enumerate() {
+            tracing::debug!(
+                chunk_index = idx + 1,
+                of = total_chunks,
+                samples = chunk.len(),
+                "processing chunk"
+            );
             let n_bins_model = self.params.mdx_dim_f_set;
-            let n_time_model = self.params.mdx_dim_t_set;
+            // mdx_dim_t_set is stored as log2 — actual model time dim is 2^value.
+            let n_time_model = 1usize << self.params.mdx_dim_t_set;
 
             // a) STFT
             let frames = stft(chunk, fft_size, hop_length, &window);
@@ -410,8 +462,11 @@ impl Separator {
                     .try_extract_tensor::<f32>()
                     .map_err(|e| AppError::OnnxInference(e.to_string()))?;
 
+                // iSTFT needs the full one-sided spectrum (fft_size/2 + 1 bins).
+                // The model only outputs n_bins_model bins; the remaining
+                // high-frequency bins are left as zeros.
                 let mut frames_out: Vec<Vec<[f32; 2]>> =
-                    vec![vec![[0.0, 0.0]; n_bins_model]; n_time_model];
+                    vec![vec![[0.0, 0.0]; n_bins_full]; n_time_model];
                 for t in 0..n_time_model {
                     for f in 0..n_bins_model {
                         let base = f * n_time_model + t;
