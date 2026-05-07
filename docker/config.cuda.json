@@ -1,5 +1,20 @@
 {
-    "model_path": "/app/models/mdxnet/UVR-MDX-NET-Voc_FT.onnx",
+    "model_path": "/app/models/mdxnet/UVR-MDX-NET-Inst_HQ_3.onnx",
     "output_dir": "/out",
-    "execution_provider": "cuda"
+    "execution_provider": "cuda",
+    "tuning": {
+        "intra_threads": 2,
+        "inter_threads": 1,
+        "parallel_execution": false,
+        "memory_pattern": false,
+        "cuda": {
+            "device_id": 0,
+            "gpu_mem_limit_mb": 2048,
+            "arena_extend_strategy": "next_power_of_two",
+            "cudnn_conv_algo_search": "heuristic",
+            "cudnn_conv_use_max_workspace": false,
+            "tf32": true,
+            "prefer_nhwc": true
+        }
+    }
 }

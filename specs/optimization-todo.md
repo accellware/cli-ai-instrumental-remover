@@ -7,14 +7,14 @@ This checklist tracks performance work for model execution in the current GPU co
 - [ ] Define the benchmark input set (short, medium, long clips) and keep it fixed for comparisons.
 - [ ] Run release-mode baseline with GPU and standard logging (no -vv).
 - [ ] Capture metrics per run:
-  - [ ] Full pipeline wall time
-  - [ ] Step 4 (model inference) wall time
+  - [x] Full pipeline wall time (captured by `scripts/bench.ps1`)
+  - [ ] Step 4 (model inference) wall time (visible in per-run log via the `[4/5] Running inference... ✓ (Xs)` line; not yet aggregated by the script)
   - [ ] Chunk count
   - [ ] Average chunk latency
   - [ ] P95 chunk latency
   - [ ] Peak memory usage
 - [ ] Record environment details for every run (GPU model, driver, CUDA image tag, ORT version).
-- [ ] Add a simple benchmark command script for reproducible runs.
+- [x] Add a simple benchmark command script for reproducible runs. (`scripts/bench.ps1` runs the GPU image against `tests/raw_vid.mp4` with optional `-Config` override for A/B-testing tuning blocks.)
 
 ## 2. Quick Wins (Low Risk, High Impact)
 
@@ -42,7 +42,7 @@ This checklist tracks performance work for model execution in the current GPU co
 ## 5. ONNX Runtime and CUDA Session Tuning
 
 - [x] Audit current SessionBuilder configuration and enable supported graph optimization settings. (ort 2.0.0-rc.12 defaults to `GraphOptimizationLevel::Level3` per the upstream docstring — no override needed.)
-- [ ] Tune thread and execution options for GPU path where applicable.
+- [x] Tune thread and execution options for GPU path where applicable. (Wired through the `tuning` config block: `intra_threads`, `inter_threads`, `parallel_execution`, `memory_pattern`; `tuning.cuda` covers `device_id`, `gpu_mem_limit_mb`, `arena_extend_strategy`, `cudnn_conv_algo_search`, `cudnn_conv_use_max_workspace`, `tf32`, `prefer_nhwc`. Defaults preserve ORT defaults; tune via `scripts/bench.ps1 -Config <override.json>`.)
 - [x] Add a warmup inference pass before timed chunk loop. (`Separator::warmup()` runs one zero-input inference to amortise EP/cuDNN first-call cost.)
 - [ ] Evaluate IO binding or equivalent path to reduce host-device transfer overhead.
 - [ ] Validate provider library loading and keep runtime image dependencies explicit.

@@ -1,5 +1,5 @@
 {
     "model_path": "../models/mdxnet/UVR-MDX-NET-Inst_HQ_3.onnx",
-    "output_dir": "./tests/out",
-    "execution_provider": "cpu"
+    "output_dir": "./out",
+    "execution_provider": "cuda"
 }

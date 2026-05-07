@@ -87,6 +87,10 @@ cargo test
 
 `model_data.json` must be co-located with the `.onnx` file. The per-inference chunk length is fixed by the model architecture (`1024 * ((1 << mdx_dim_t_set) - 1)`) and is not user-configurable.
 
+### Optional `tuning` block
+
+All ORT/CUDA tuning is opt-in. Top-level `tuning` may include any of: `intra_threads`, `inter_threads`, `parallel_execution`, `memory_pattern`. The nested `tuning.cuda` may include: `device_id`, `gpu_mem_limit_mb` (MiB), `arena_extend_strategy` (`"next_power_of_two"` | `"same_as_requested"`), `cudnn_conv_algo_search` (`"exhaustive"` | `"heuristic"` | `"default"`), `cudnn_conv_use_max_workspace`, `tf32`, `prefer_nhwc`. Each key maps 1:1 to the matching ort 2.x `SessionBuilder` / `ort::ep::CUDA` builder method. Omitted fields keep ORT's default; unknown keys are rejected.
+
 ## Dependencies
 
 | Crate                    | Purpose                                                                              |

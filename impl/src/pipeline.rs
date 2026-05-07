@@ -239,7 +239,7 @@ pub fn run(input_path: &Path, config: &Config) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ExecutionProvider};
+    use crate::config::{Config, ExecutionProvider, Tuning};
 
     #[test]
     fn run_returns_error_for_missing_input() {
@@ -250,6 +250,7 @@ mod tests {
             model_path: exe.clone(),
             output_dir: std::env::temp_dir().join("ms_test_output"),
             execution_provider: ExecutionProvider::Cpu,
+            tuning: Tuning::default(),
         };
         let result = run(Path::new("/nonexistent/video.mp4"), &config);
         assert!(

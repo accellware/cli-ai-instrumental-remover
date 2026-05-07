@@ -15,7 +15,9 @@
 use std::path::Path;
 use std::sync::Arc;
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
-use crate::config::{Config, ExecutionProvider};
+use crate::config::{
+    ArenaExtendStrategyOpt, Config, ConvAlgorithmSearchOpt, ExecutionProvider,
+};
 use crate::model_data::ModelParams;
 use crate::error::AppError;
 
@@ -283,17 +285,78 @@ impl Separator {
             "building ONNX session"
         );
 
-        let builder = ort::session::Session::builder()
+        let mut builder = ort::session::Session::builder()
             .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
 
-        let mut builder = match config.execution_provider {
-            ExecutionProvider::Cuda => builder
-                .with_execution_providers([
-                    ort::ep::CUDA::default().build().error_on_failure(),
-                ])
-                .map_err(|e| AppError::OnnxLoad(e.to_string()))?,
-            ExecutionProvider::Cpu => builder,
-        };
+        // ── Session-level tuning (applies to both CPU and CUDA paths) ────────
+        let t = &config.tuning;
+        if let Some(n) = t.intra_threads {
+            builder = builder
+                .with_intra_threads(n)
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+        }
+        if let Some(n) = t.inter_threads {
+            builder = builder
+                .with_inter_threads(n)
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+        }
+        if let Some(p) = t.parallel_execution {
+            builder = builder
+                .with_parallel_execution(p)
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+        }
+        if let Some(m) = t.memory_pattern {
+            builder = builder
+                .with_memory_pattern(m)
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+        }
+
+        // ── Execution provider selection ─────────────────────────────────────
+        if matches!(config.execution_provider, ExecutionProvider::Cuda) {
+            let mut cuda = ort::ep::CUDA::default();
+            let c = &t.cuda;
+            if let Some(id) = c.device_id {
+                cuda = cuda.with_device_id(id);
+            }
+            if let Some(mb) = c.gpu_mem_limit_mb {
+                cuda = cuda.with_memory_limit(mb * 1024 * 1024);
+            }
+            if let Some(s) = c.arena_extend_strategy {
+                cuda = cuda.with_arena_extend_strategy(match s {
+                    ArenaExtendStrategyOpt::NextPowerOfTwo => {
+                        ort::ep::ArenaExtendStrategy::NextPowerOfTwo
+                    }
+                    ArenaExtendStrategyOpt::SameAsRequested => {
+                        ort::ep::ArenaExtendStrategy::SameAsRequested
+                    }
+                });
+            }
+            if let Some(s) = c.cudnn_conv_algo_search {
+                cuda = cuda.with_conv_algorithm_search(match s {
+                    ConvAlgorithmSearchOpt::Exhaustive => {
+                        ort::ep::cuda::ConvAlgorithmSearch::Exhaustive
+                    }
+                    ConvAlgorithmSearchOpt::Heuristic => {
+                        ort::ep::cuda::ConvAlgorithmSearch::Heuristic
+                    }
+                    ConvAlgorithmSearchOpt::Default => {
+                        ort::ep::cuda::ConvAlgorithmSearch::Default
+                    }
+                });
+            }
+            if let Some(b) = c.cudnn_conv_use_max_workspace {
+                cuda = cuda.with_conv_max_workspace(b);
+            }
+            if let Some(b) = c.tf32 {
+                cuda = cuda.with_tf32(b);
+            }
+            if let Some(b) = c.prefer_nhwc {
+                cuda = cuda.with_prefer_nhwc(b);
+            }
+            builder = builder
+                .with_execution_providers([cuda.build().error_on_failure()])
+                .map_err(|e| AppError::OnnxLoad(e.to_string()))?;
+        }
 
         let session = builder
             .commit_from_file(&config.model_path)
@@ -836,13 +899,14 @@ mod tests {
     #[test]
     fn separator_new_fails_on_missing_model() {
         use std::path::PathBuf;
-        use crate::config::{Config, ExecutionProvider};
+        use crate::config::{Config, ExecutionProvider, Tuning};
         use crate::model_data::ModelParams;
 
         let config = Config {
             model_path: PathBuf::from("/nonexistent/model.onnx"),
             output_dir: PathBuf::from("./output"),
             execution_provider: ExecutionProvider::Cpu,
+            tuning: Tuning::default(),
         };
         let params = ModelParams {
             compensate: 1.0,
